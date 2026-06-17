@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "gencan-sse"
+version = "0.1.0"
+description = "GenCan Speech Synthesis Engine — standalone, reusable TTS pipeline with synchronous API and pluggable providers."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.11"
+authors = [
+    {name = "Jon Heselton"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "pyaudio",
+]
+
+[project.optional-dependencies]
+gemini = ["google-genai", "python-dotenv"]
+yaml = ["pyyaml"]
+all = ["google-genai", "python-dotenv", "pyyaml"]
+dev = ["pytest", "pytest-asyncio", "pyyaml", "google-genai", "python-dotenv"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gencan_sse*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
