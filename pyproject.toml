@@ -27,8 +27,12 @@ dependencies = [
 [project.optional-dependencies]
 gemini = ["google-genai", "python-dotenv"]
 yaml = ["pyyaml"]
-all = ["google-genai", "python-dotenv", "pyyaml"]
-dev = ["pytest", "pytest-asyncio", "pyyaml", "google-genai", "python-dotenv"]
+server = ["fastapi", "uvicorn", "pydantic"]
+all = ["google-genai", "python-dotenv", "pyyaml", "fastapi", "uvicorn", "pydantic"]
+dev = ["pytest", "pytest-asyncio", "pyyaml", "google-genai", "python-dotenv", "fastapi", "uvicorn", "pydantic", "httpx"]
+
+[project.scripts]
+gencan-server = "gencan_sse.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
