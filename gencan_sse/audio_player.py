@@ -8,7 +8,12 @@ import struct
 import time
 from typing import Optional
 
-from gencan_sse.types import AudioChunk, Priority, EventType
+from gencan_sse.types import (
+    AudioChunk,
+    AudioTask,
+    EventType,
+    Priority,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +118,11 @@ class _PriorityEntry:
     """Wrapper for heap queue ordering."""
     _counter = 0
 
-    def __init__(self, chunk: AudioChunk):
+    def __init__(self, audio_task: AudioTask):
         _PriorityEntry._counter += 1
-        self.priority = chunk.priority.value
+        self.priority = audio_task.priority.value
         self.counter = _PriorityEntry._counter
-        self.chunk = chunk
+        self.audio_task = audio_task
 
     def __lt__(self, other):
         if self.priority != other.priority:
@@ -237,52 +242,67 @@ class AudioPlayer:
             logger.warning("Failed to initialize audio: %s. Silent mode.", e)
             logger.debug("_init_pyaudio: exception details", exc_info=True)
 
-    async def enqueue(self, chunk: AudioChunk) -> None:
-        """Add audio to the priority queue. Non-blocking."""
+    async def enqueue(self, audio_task: AudioTask) -> None:
+        """Add an AudioTask to the priority queue. Non-blocking."""
         async with self._lock:
             # Evict stale entries
             now = time.time()
-            self._heap = [
-                e for e in self._heap
-                if (now - e.chunk.timestamp) < self._stale_timeout
-                or e.chunk.priority == Priority.ERROR
-            ]
+            stale_entries = []
+            fresh_entries = []
+            for e in self._heap:
+                if (now - e.audio_task.timestamp) >= self._stale_timeout and e.audio_task.priority != Priority.ERROR:
+                    stale_entries.append(e)
+                else:
+                    fresh_entries.append(e)
+            
+            for e in stale_entries:
+                if not e.audio_task.task.done():
+                    e.audio_task.task.cancel()
+
+            self._heap = fresh_entries
 
             # Enforce max depth — drop oldest non-error entries
             while len(self._heap) >= self._max_depth:
-                # Find lowest-priority (highest .value) non-error entry
-                non_errors = [e for e in self._heap if e.chunk.priority != Priority.ERROR]
+                non_errors = [e for e in self._heap if e.audio_task.priority != Priority.ERROR]
                 if non_errors:
                     victim = max(non_errors, key=lambda e: (e.priority, -e.counter))
                     self._heap.remove(victim)
+                    if not victim.audio_task.task.done():
+                        victim.audio_task.task.cancel()
                     logger.debug("Evicted stale/low-priority entry from queue")
                 else:
-                    break  # All errors, don't drop
+                    break
 
-            heapq.heappush(self._heap, _PriorityEntry(chunk))
+            heapq.heappush(self._heap, _PriorityEntry(audio_task))
             heapq.heapify(self._heap)  # Re-sort after stale eviction
 
         self._notify.set()
-        logger.debug("Enqueued: %d bytes, priority=%s, queue_depth=%d",
-                      len(chunk.pcm_data), chunk.priority.name, len(self._heap))
+        logger.debug("Enqueued AudioTask: priority=%s, queue_depth=%d",
+                      audio_task.priority.name, len(self._heap))
 
     async def enqueue_chime(self) -> None:
         """Enqueue a code-block chime tone."""
-        chunk = AudioChunk(
-            pcm_data=self._chime_pcm,
+        async def _chime_pcm() -> bytes:
+            return self._chime_pcm
+
+        task = AudioTask(
+            task=asyncio.create_task(_chime_pcm()),
             priority=Priority.TOOL,
             event_type=EventType.SKIP,
         )
-        await self.enqueue(chunk)
+        await self.enqueue(task)
 
     async def flush_event_type(self, old_type: EventType) -> None:
         """Flush queued entries of a specific event type on transition."""
         async with self._lock:
-            self._heap = [
-                e for e in self._heap
-                if e.chunk.event_type != old_type
-                or e.chunk.priority == Priority.ERROR
-            ]
+            surviving = []
+            for e in self._heap:
+                if e.audio_task.event_type == old_type and e.audio_task.priority != Priority.ERROR:
+                    if not e.audio_task.task.done():
+                        e.audio_task.task.cancel()
+                else:
+                    surviving.append(e)
+            self._heap = surviving
             heapq.heapify(self._heap)
         logger.debug("Flushed stale entries for event type: %s", old_type.name)
 
@@ -293,58 +313,87 @@ class AudioPlayer:
         logger.debug("play_loop: has_stream=%s, volume=%.2f, max_depth=%d, stale_timeout=%.1f",
                      self._stream is not None, self._volume, self._max_depth, self._stale_timeout)
 
+        notify_task = asyncio.create_task(self._notify.wait())
+
         while self._running:
-            # Wait for notification or timeout
-            try:
-                await asyncio.wait_for(self._notify.wait(), timeout=0.5)
-            except asyncio.TimeoutError:
+            # Check heap state without locking first for performance
+            if not self._heap:
+                try:
+                    await asyncio.wait_for(asyncio.shield(notify_task), timeout=0.5)
+                except asyncio.TimeoutError:
+                    continue
+                # Notified
+                self._notify.clear()
+                notify_task = asyncio.create_task(self._notify.wait())
                 continue
 
-            self._notify.clear()
-            logger.debug("play_loop: notified, draining queue (depth=%d)", len(self._heap))
-
-            # Drain all available entries in priority order
-            while self._running:
-                async with self._lock:
-                    if not self._heap:
-                        break
-                    entry = heapq.heappop(self._heap)
-
-                chunk = entry.chunk
-                if not chunk.pcm_data:
-                    logger.debug("play_loop: skipping chunk with no pcm_data")
+            # Pop highest priority
+            async with self._lock:
+                if not self._heap:
                     continue
+                entry = heapq.heappop(self._heap)
 
-                # Check staleness
-                age = time.time() - chunk.timestamp
-                if age > self._stale_timeout:
-                    if chunk.priority != Priority.ERROR:
-                        logger.debug("Dropped stale audio chunk (age=%.1fs > timeout=%.1fs, type=%s)",
-                                     age, self._stale_timeout, chunk.event_type.name)
-                        continue
-                    else:
-                        logger.debug("play_loop: playing stale ERROR chunk (age=%.1fs)", age)
+            audio_task = entry.audio_task
+            age = time.time() - audio_task.timestamp
 
-                # Apply volume
-                pcm = apply_volume(chunk.pcm_data, self._volume) if self._volume < 1.0 else chunk.pcm_data
-                duration_est = len(pcm) / (self._sample_rate * self._sample_width)
+            if age > self._stale_timeout and audio_task.priority != Priority.ERROR:
+                if not audio_task.task.done():
+                    audio_task.task.cancel()
+                continue
 
-                # Play
-                try:
-                    if self._stream:
-                        play_t0 = time.time()
-                        target_rate = int(self._sample_rate * self._speed)
-                        resampled_pcm = resample_pcm(pcm, target_rate, self._hardware_rate)
-                        await asyncio.to_thread(self._stream.write, resampled_pcm)
-                        play_elapsed = time.time() - play_t0
-                        logger.debug("Played %d bytes (resampled to %d bytes) in %.3fs (priority=%s, type=%s, age=%.1fs, remaining=%d)",
-                                     len(pcm), len(resampled_pcm), play_elapsed, chunk.priority.name,
-                                     chunk.event_type.name, age, len(self._heap))
-                    else:
-                        logger.debug("Silent mode: skipped %d bytes (~%.1fs audio)", len(pcm), duration_est)
-                except Exception as e:
-                    logger.warning("Error writing to audio stream: %s", e)
+            # Await synthesis with preemption
+            done, pending = await asyncio.wait(
+                [audio_task.task, notify_task],
+                return_when=asyncio.FIRST_COMPLETED
+            )
 
+            if notify_task in done:
+                # A new item was enqueued. Re-evaluate priorities.
+                async with self._lock:
+                    heapq.heappush(self._heap, entry)
+                self._notify.clear()
+                notify_task = asyncio.create_task(self._notify.wait())
+                continue
+
+            # Synthesis completed
+            try:
+                pcm = audio_task.task.result()
+            except asyncio.CancelledError:
+                continue
+            except Exception as e:
+                logger.warning("Synthesis task failed: %s", e)
+                continue
+
+            if not pcm:
+                continue
+
+            age = time.time() - audio_task.timestamp
+            if age > self._stale_timeout and audio_task.priority != Priority.ERROR:
+                logger.debug("Dropped stale audio after synthesis (age=%.1fs, type=%s)", age, audio_task.event_type.name)
+                continue
+
+            # Apply volume
+            pcm = apply_volume(pcm, self._volume) if self._volume < 1.0 else pcm
+            duration_est = len(pcm) / (self._sample_rate * self._sample_width)
+
+            # Play
+            try:
+                if self._stream:
+                    play_t0 = time.time()
+                    target_rate = int(self._sample_rate * self._speed)
+                    resampled_pcm = resample_pcm(pcm, target_rate, self._hardware_rate)
+                    await asyncio.to_thread(self._stream.write, resampled_pcm)
+                    play_elapsed = time.time() - play_t0
+                    logger.debug("Played %d bytes in %.3fs (priority=%s, type=%s, age=%.1fs, remaining=%d)",
+                                 len(pcm), play_elapsed, audio_task.priority.name,
+                                 audio_task.event_type.name, age, len(self._heap))
+                else:
+                    logger.debug("Silent mode: skipped %d bytes (~%.1fs audio)", len(pcm), duration_est)
+            except Exception as e:
+                logger.warning("Error writing to audio stream: %s", e)
+
+        if not notify_task.done():
+            notify_task.cancel()
         logger.info("Audio playback loop stopped")
 
     def set_speed(self, speed: float) -> None:
@@ -361,6 +410,12 @@ class AudioPlayer:
         logger.debug("AudioPlayer.stop: stopping (queue_depth=%d, running=%s)", len(self._heap), self._running)
         self._running = False
         self._notify.set()  # Unblock the loop
+
+        async with self._lock:
+            for entry in self._heap:
+                if not entry.audio_task.task.done():
+                    entry.audio_task.task.cancel()
+            self._heap.clear()
 
         if self._stream:
             try:

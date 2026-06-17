@@ -18,6 +18,7 @@ from typing import Optional, TYPE_CHECKING
 
 from gencan_sse.types import (
     AudioChunk,
+    AudioTask,
     EventType,
     Priority,
     SpeakResult,
@@ -227,28 +228,29 @@ class PlaybackWorker:
         if not msg.text or not msg.text.strip():
             return
 
-        pcm = await self._tts.synthesize(msg.text, msg.voice, msg.style)
+        async def _synthesize() -> Optional[bytes]:
+            pcm = await self._tts.synthesize(msg.text, msg.voice, msg.style)
+            if not pcm:
+                logger.warning("TTS returned empty response for speak request")
+                from gencan_sse.audio_player import generate_noise
+                pcm = generate_noise(
+                    duration_ms=400,
+                    sample_rate=self._player._sample_rate,
+                    volume=0.15,
+                )
+            return pcm
 
-        if not pcm:
-            logger.warning("TTS returned empty response for speak request")
-            from gencan_sse.audio_player import generate_noise
-            pcm = generate_noise(
-                duration_ms=400,
-                sample_rate=self._player._sample_rate,
-                volume=0.15,
-            )
-
-        if pcm:
-            chunk = AudioChunk(
-                pcm_data=pcm,
-                priority=msg.priority,
-                event_type=msg.event_type,
-            )
-            await self._player.enqueue(chunk)
-            logger.debug(
-                "Speak enqueued: %d bytes, voice=%s, priority=%s",
-                len(pcm), msg.voice, msg.priority.name,
-            )
+        task = AudioTask(
+            task=asyncio.create_task(_synthesize()),
+            priority=msg.priority,
+            event_type=msg.event_type,
+            timestamp=msg.timestamp,
+        )
+        await self._player.enqueue(task)
+        logger.debug(
+            "Speak task enqueued: voice=%s, priority=%s",
+            msg.voice, msg.priority.name,
+        )
 
     async def _handle_event(self, msg: EventMessage) -> None:
         """Handle a structured event through the full pipeline."""
@@ -269,41 +271,30 @@ class PlaybackWorker:
 
         # Code block chime
         if is_code_block(event.text) and self._code_block_chime:
-            from gencan_sse.audio_player import generate_chime
-            chime_pcm = generate_chime(
-                frequency=440.0,
-                duration_ms=200,
-                sample_rate=self._player._sample_rate,
-                volume=0.3,
-            )
-            chime_chunk = AudioChunk(
-                pcm_data=chime_pcm,
-                priority=Priority.TOOL,
-                event_type=EventType.SKIP,
-            )
-            await self._player.enqueue(chime_chunk)
+            await self._player.enqueue_chime()
 
         filtered = self._filter.filter(event.text)
         if not filtered:
             return
 
-        pcm = await self._tts.synthesize(filtered, voice_name, style_prefix)
+        async def _synthesize() -> Optional[bytes]:
+            pcm = await self._tts.synthesize(filtered, voice_name, style_prefix)
+            if not pcm:
+                from gencan_sse.audio_player import generate_noise
+                pcm = generate_noise(
+                    duration_ms=400,
+                    sample_rate=self._player._sample_rate,
+                    volume=0.15,
+                )
+            return pcm
 
-        if not pcm:
-            from gencan_sse.audio_player import generate_noise
-            pcm = generate_noise(
-                duration_ms=400,
-                sample_rate=self._player._sample_rate,
-                volume=0.15,
-            )
-
-        if pcm:
-            chunk = AudioChunk(
-                pcm_data=pcm,
-                priority=event.priority,
-                event_type=event.event_type,
-            )
-            await self._player.enqueue(chunk)
+        task = AudioTask(
+            task=asyncio.create_task(_synthesize()),
+            priority=event.priority,
+            event_type=event.event_type,
+            timestamp=msg.timestamp,
+        )
+        await self._player.enqueue(task)
 
     async def _handle_control(self, msg: ControlMessage) -> None:
         """Handle a control message."""

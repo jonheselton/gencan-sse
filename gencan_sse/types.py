@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 import time
+import asyncio
 
 
 class EventType(Enum):
@@ -73,6 +74,23 @@ class AudioChunk:
     """
 
     pcm_data: bytes
+    priority: Priority
+    event_type: EventType
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class AudioTask:
+    """A background task synthesizing audio data for future playback.
+
+    Attributes:
+        task: An asyncio.Task that returns raw PCM bytes (or None).
+        priority: Queue priority for playback ordering.
+        event_type: The event category that produced this audio.
+        timestamp: Wall-clock time when this task was created.
+    """
+
+    task: "asyncio.Task[Optional[bytes]]"
     priority: Priority
     event_type: EventType
     timestamp: float = field(default_factory=time.time)
