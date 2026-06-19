@@ -98,7 +98,11 @@ class GeminiTTSProvider:
                     self._models.append(m)
         else:
             default_fallbacks = [
+                "gemini-3.1-flash-tts",
+                "gemini-3.1-flash-tts-preview",
+                "gemini-2.5-flash-tts",
                 "gemini-2.5-flash-preview-tts",
+                "gemini-2.5-pro-tts",
                 "gemini-2.5-pro-preview-tts",
             ]
             for m in default_fallbacks:
@@ -196,7 +200,7 @@ class GeminiTTSProvider:
         text: str,
         voice: str = "Kore",
         style: str = "",
-    ) -> bytes:
+    ) -> tuple[bytes, dict]:
         """Synthesize *text* to raw PCM audio bytes.
 
         Respects circuit breaker, concurrency limits, and rate-limit backoff.
@@ -207,9 +211,8 @@ class GeminiTTSProvider:
             style: Style / audio tags to prepend (e.g. ``"[alert] "``).
 
         Returns:
-            Raw PCM audio bytes (24 kHz, 16-bit signed, mono).
-            Returns empty ``bytes`` on failure or during circuit-breaker
-            cooldown.
+            A tuple of (PCM audio bytes, metadata dict).
+            Returns (b"", {}) on failure or during circuit-breaker cooldown.
         """
         logger.debug(
             "synthesize called: voice=%s, style=%r, text_len=%d, "
@@ -223,7 +226,7 @@ class GeminiTTSProvider:
 
         if not (self._client or self._local_client) or not text.strip():
             logger.debug("synthesize: early return (no client or empty text)")
-            return b""
+            return b"", {}
 
         # Circuit breaker check
         if self.is_circuit_open:
@@ -231,7 +234,7 @@ class GeminiTTSProvider:
                 "All circuits open — skipping TTS (%.0fs remaining)",
                 self.cooldown_remaining,
             )
-            return b""
+            return b"", {}
 
         full_text = f"{style}{text}" if style else text
         text_bytes = len(full_text.encode("utf-8"))
@@ -377,7 +380,7 @@ class GeminiTTSProvider:
         self,
         full_text: str,
         voice_name: str,
-    ) -> bytes:
+    ) -> tuple[bytes, dict]:
         """Attempt synthesis using each model in priority order."""
         for model in self._models:
             if self.is_model_circuit_open(model):
@@ -386,11 +389,11 @@ class GeminiTTSProvider:
                 )
                 continue
 
-            audio_data = await self._synthesize_with_model_retry(
+            audio_data, metadata = await self._synthesize_with_model_retry(
                 model, full_text, voice_name
             )
             if audio_data:
-                return audio_data
+                return audio_data, metadata
 
             # Failed and possibly triggered circuit — fall through
             logger.warning(
@@ -398,14 +401,14 @@ class GeminiTTSProvider:
             )
 
         logger.error("All TTS models failed to synthesize audio.")
-        return b""
+        return b"", {}
 
     async def _synthesize_with_model_retry(
         self,
         model: str,
         full_text: str,
         voice_name: str,
-    ) -> bytes:
+    ) -> tuple[bytes, dict]:
         """Call the API for *model* with retries and exponential backoff."""
         state = self._model_states[model]
 
@@ -482,7 +485,13 @@ class GeminiTTSProvider:
                                 model,
                                 api_elapsed,
                             )
-                            return part.inline_data.data
+                            metadata = {
+                                "model": model,
+                                "provider": self.name,
+                                "latency_ms": api_elapsed * 1000,
+                                "audio_bytes": audio_bytes,
+                            }
+                            return part.inline_data.data, metadata
 
                 logger.warning(
                     "TTS response contained no audio data for model %s", model
@@ -493,7 +502,7 @@ class GeminiTTSProvider:
                     >= self._circuit_break_threshold
                 ):
                     self._open_model_circuit(model, self._circuit_break_cooldown)
-                return b""
+                return b"", {}
 
             except Exception as exc:
                 error_str = str(exc)
@@ -530,7 +539,7 @@ class GeminiTTSProvider:
                         cooldown,
                     )
                     self._open_model_circuit(model, cooldown)
-                    return b""  # Stop retrying this model on 429
+                    return b"", {}  # Stop retrying this model on 429
 
                 # Check circuit breaker threshold for other errors
                 if (
@@ -538,7 +547,7 @@ class GeminiTTSProvider:
                     >= self._circuit_break_threshold
                 ):
                     self._open_model_circuit(model, self._circuit_break_cooldown)
-                    return b""
+                    return b"", {}
 
                 if attempt < self._max_retries - 1:
                     delay = min(2**attempt + random.uniform(0, 1), 30)
@@ -560,4 +569,4 @@ class GeminiTTSProvider:
                         exc,
                     )
 
-        return b""
+        return b"", {}

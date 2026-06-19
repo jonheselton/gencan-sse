@@ -685,10 +685,10 @@
                 </div>
             </div>
 
-            <!-- Usage & Billing Tracker Card -->
+            <!-- Usage & Diagnostics Card -->
             <div class="card">
                 <div class="card-title">
-                    <span>Usage & Billing Tracker</span>
+                    <span>Usage & Chunk Metrics</span>
                     <span style="font-size: 0.8rem; background: rgba(16,185,129,0.1); color: var(--accent-emerald); padding: 2px 8px; border-radius: 4px;">ESTIMATED</span>
                 </div>
                 <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0.8rem 0; gap: 6px;">
@@ -704,6 +704,28 @@
                     <div class="diagnostic-row">
                         <span>API Requests</span>
                         <span class="diagnostic-val" id="billingRequests">0 (0 failed)</span>
+                    </div>
+                    <div style="border-top: 1px solid rgba(255,255,255,0.1); margin: 8px 0;"></div>
+                    <div class="diagnostic-row">
+                        <span>Avg Chunk Size</span>
+                        <span class="diagnostic-val" id="avgChunkSize">0 bytes</span>
+                    </div>
+                    <div class="diagnostic-row">
+                        <span>Avg Render Latency</span>
+                        <span class="diagnostic-val" id="avgLatency">0 ms</span>
+                    </div>
+                    <div class="diagnostic-row">
+                        <span>Bottleneck Status</span>
+                        <span class="diagnostic-val" id="bottleneckStatus">Healthy</span>
+                    </div>
+                    <div style="border-top: 1px solid rgba(255,255,255,0.1); margin: 8px 0;"></div>
+                    <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-bottom: 4px;">PROVIDER USAGE</div>
+                    <div id="providerUsageContainer">
+                        <div class="diagnostic-row"><span>No data</span></div>
+                    </div>
+                    <div style="font-size: 0.8rem; color: var(--color-text-muted); margin-top: 8px; margin-bottom: 4px;">MODEL USAGE</div>
+                    <div id="modelUsageContainer">
+                        <div class="diagnostic-row"><span>No data</span></div>
                     </div>
                 </div>
             </div>
@@ -859,6 +881,47 @@
                     document.getElementById("billingCost").textContent = `$${status.usage.estimated_cost_usd.toFixed(5)}`;
                     document.getElementById("billingChars").textContent = `${status.usage.total_characters.toLocaleString()} chars`;
                     document.getElementById("billingRequests").textContent = `${status.usage.total_requests} (${status.usage.failed_requests} failed)`;
+
+                    // Chunk metrics
+                    const cm = status.usage.chunk_metrics;
+                    if (cm && cm.total_chunks > 0) {
+                        const avgLat = cm.total_latency_ms / cm.total_chunks;
+                        const avgBytes = cm.total_audio_bytes / cm.total_chunks;
+                        document.getElementById("avgChunkSize").textContent = `${Math.round(avgBytes).toLocaleString()} bytes`;
+                        document.getElementById("avgLatency").textContent = `${Math.round(avgLat)} ms`;
+                        
+                        const estDurationMs = (avgBytes / (24000 * 2)) * 1000;
+                        const bStatus = document.getElementById("bottleneckStatus");
+                        if (avgLat > estDurationMs) {
+                            bStatus.textContent = "Degraded (Latency > Playback)";
+                            bStatus.className = "diagnostic-val warning";
+                        } else {
+                            bStatus.textContent = "Healthy";
+                            bStatus.className = "diagnostic-val healthy";
+                        }
+                    }
+
+                    // Provider usage
+                    const pContainer = document.getElementById("providerUsageContainer");
+                    if (status.usage.by_provider && Object.keys(status.usage.by_provider).length > 0) {
+                        pContainer.innerHTML = Object.entries(status.usage.by_provider).map(([prov, stats]) => `
+                            <div class="diagnostic-row">
+                                <span>${prov}</span>
+                                <span class="diagnostic-val">${stats.requests} reqs</span>
+                            </div>
+                        `).join('');
+                    }
+
+                    // Model usage
+                    const mContainer = document.getElementById("modelUsageContainer");
+                    if (status.usage.by_model && Object.keys(status.usage.by_model).length > 0) {
+                        mContainer.innerHTML = Object.entries(status.usage.by_model).map(([mod, stats]) => `
+                            <div class="diagnostic-row">
+                                <span style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${mod}</span>
+                                <span class="diagnostic-val">${stats.requests} reqs</span>
+                            </div>
+                        `).join('');
+                    }
                 }
 
                 // Render voice configurations if not already done, or update

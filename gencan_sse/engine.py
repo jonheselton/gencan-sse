@@ -131,6 +131,7 @@ class SpeechEngine:
             text_filter=self._text_filter,
             voice_map=self._voice_map,
             code_block_chime=self._config.code_block_chime,
+            on_metrics_callback=self._record_chunk_metrics,
         )
 
         # Activity logging and usage tracking
@@ -140,6 +141,9 @@ class SpeechEngine:
             "total_requests": 0,
             "failed_requests": 0,
             "estimated_cost_usd": 0.0,
+            "by_model": {},
+            "by_provider": {},
+            "chunk_metrics": {"total_latency_ms": 0.0, "total_audio_bytes": 0, "total_chunks": 0},
         }
 
         logger.info(
@@ -405,6 +409,36 @@ class SpeechEngine:
         self._usage_stats["estimated_cost_usd"] = (
             self._usage_stats["total_characters"] * 15.0 / 1_000_000
         )
+
+    def _record_chunk_metrics(self, metadata: dict) -> None:
+        """Record usage and performance metrics for a rendered chunk."""
+        model = metadata.get("model", "unknown")
+        provider = metadata.get("provider", "unknown")
+        latency_ms = metadata.get("latency_ms", 0.0)
+        audio_bytes = metadata.get("audio_bytes", 0)
+
+        # Update per-model stats
+        if model not in self._usage_stats["by_model"]:
+            self._usage_stats["by_model"][model] = {"requests": 0, "audio_bytes": 0, "total_latency_ms": 0.0}
+        
+        m_stat = self._usage_stats["by_model"][model]
+        m_stat["requests"] += 1
+        m_stat["audio_bytes"] += audio_bytes
+        m_stat["total_latency_ms"] += latency_ms
+
+        # Update per-provider stats
+        if provider not in self._usage_stats["by_provider"]:
+            self._usage_stats["by_provider"][provider] = {"requests": 0, "audio_bytes": 0}
+        
+        p_stat = self._usage_stats["by_provider"][provider]
+        p_stat["requests"] += 1
+        p_stat["audio_bytes"] += audio_bytes
+
+        # Update global chunk metrics
+        cm = self._usage_stats["chunk_metrics"]
+        cm["total_latency_ms"] += latency_ms
+        cm["total_audio_bytes"] += audio_bytes
+        cm["total_chunks"] += 1
 
     # ------------------------------------------------------------------
     # Drain

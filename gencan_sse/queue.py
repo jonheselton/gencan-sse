@@ -96,12 +96,14 @@ class PlaybackWorker:
         text_filter: TextFilter,
         voice_map: dict[EventType, tuple[str, str, bool]],
         code_block_chime: bool = True,
+        on_metrics_callback=None,
     ) -> None:
         self._tts = tts_provider
         self._player = audio_player
         self._filter = text_filter
         self._voice_map = voice_map
         self._code_block_chime = code_block_chime
+        self._on_metrics = on_metrics_callback
 
         self._queue: queue.Queue = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -232,7 +234,14 @@ class PlaybackWorker:
         chunks = chunk_sentences(msg.text)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
-                pcm = await self._tts.synthesize(text, msg.voice, msg.style)
+                t0 = time.time()
+                pcm, metadata = await self._tts.synthesize(text, msg.voice, msg.style)
+                latency = time.time() - t0
+                if self._on_metrics and metadata:
+                    self._on_metrics(metadata)
+                elif self._on_metrics:
+                    self._on_metrics({"latency_ms": latency * 1000, "audio_bytes": len(pcm) if pcm else 0})
+
                 if not pcm:
                     logger.warning("TTS returned empty response for speak request")
                     from gencan_sse.audio_player import generate_noise
@@ -284,7 +293,14 @@ class PlaybackWorker:
         chunks = chunk_sentences(filtered)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
-                pcm = await self._tts.synthesize(text, voice_name, style_prefix)
+                t0 = time.time()
+                pcm, metadata = await self._tts.synthesize(text, voice_name, style_prefix)
+                latency = time.time() - t0
+                if self._on_metrics and metadata:
+                    self._on_metrics(metadata)
+                elif self._on_metrics:
+                    self._on_metrics({"latency_ms": latency * 1000, "audio_bytes": len(pcm) if pcm else 0})
+
                 if not pcm:
                     from gencan_sse.audio_player import generate_noise
                     pcm = generate_noise(

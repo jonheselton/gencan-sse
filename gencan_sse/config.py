@@ -114,7 +114,11 @@ class EngineConfig:
     tts_model: str = "gemini-3.1-flash-tts-preview"
     tts_fallback_models: list[str] = field(
         default_factory=lambda: [
+            "gemini-3.1-flash-tts",
+            "gemini-3.1-flash-tts-preview",
+            "gemini-2.5-flash-tts",
             "gemini-2.5-flash-preview-tts",
+            "gemini-2.5-pro-tts",
             "gemini-2.5-pro-preview-tts",
         ]
     )

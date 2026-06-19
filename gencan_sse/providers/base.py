@@ -41,7 +41,7 @@ class TTSProvider(Protocol):
         text: str,
         voice: str = "Kore",
         style: str = "",
-    ) -> bytes:
+    ) -> tuple[bytes, dict]:
         """Synthesize text to raw PCM audio bytes.
 
         Args:
@@ -50,8 +50,10 @@ class TTSProvider(Protocol):
             style: Style/audio tags to prepend (provider-specific).
 
         Returns:
-            Raw PCM audio bytes (expected: 24 kHz, 16-bit signed, mono).
-            Returns empty bytes on failure.
+            A tuple containing:
+            - Raw PCM audio bytes (expected: 24 kHz, 16-bit signed, mono).
+              Returns empty bytes on failure.
+            - A dictionary containing metadata such as model used and latency.
         """
         ...
 

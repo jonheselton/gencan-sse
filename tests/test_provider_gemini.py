@@ -49,6 +49,17 @@ class TestGeminiTTSProviderInit:
                 assert "model-a" in provider._models
                 assert "model-b" in provider._models
 
+    def test_default_fallback_models(self):
+        with patch.dict("os.environ", {"AI_STUDIO_KEY": "test-key"}):
+            with patch("google.genai.Client"):
+                provider = GeminiTTSProvider()
+                assert "gemini-3.1-flash-tts" in provider._models
+                assert "gemini-3.1-flash-tts-preview" in provider._models
+                assert "gemini-2.5-flash-tts" in provider._models
+                assert "gemini-2.5-flash-preview-tts" in provider._models
+                assert "gemini-2.5-pro-tts" in provider._models
+                assert "gemini-2.5-pro-preview-tts" in provider._models
+
 
 class TestGeminiTTSProviderSynthesize:
     """Tests for GeminiTTSProvider.synthesize()."""
@@ -59,7 +70,7 @@ class TestGeminiTTSProviderSynthesize:
             with patch("google.genai.Client"):
                 provider = GeminiTTSProvider()
                 result = await provider.synthesize("")
-                assert result == b""
+                assert result == (b"", {})
 
     @pytest.mark.asyncio
     async def test_whitespace_text_returns_empty(self):
@@ -67,14 +78,14 @@ class TestGeminiTTSProviderSynthesize:
             with patch("google.genai.Client"):
                 provider = GeminiTTSProvider()
                 result = await provider.synthesize("   ")
-                assert result == b""
+                assert result == (b"", {})
 
     @pytest.mark.asyncio
     async def test_no_client_returns_empty(self):
         with patch.dict("os.environ", {}, clear=True):
             provider = GeminiTTSProvider()
             result = await provider.synthesize("hello")
-            assert result == b""
+            assert result == (b"", {})
 
     @pytest.mark.asyncio
     async def test_multibyte_truncation(self):
@@ -96,7 +107,10 @@ class TestGeminiTTSProviderSynthesize:
                 # Should have been called (not crashed on truncation)
                 # The result may be empty bytes since mock returns no audio,
                 # but the important thing is it didn't crash
-                assert isinstance(result, bytes)
+                assert isinstance(result, tuple)
+                assert len(result) == 2
+                assert isinstance(result[0], bytes)
+                assert isinstance(result[1], dict)
 
 
 class TestParseRetryDelay:
