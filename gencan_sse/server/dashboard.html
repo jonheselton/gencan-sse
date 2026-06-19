@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GenCan SSE — Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #090d16;
+            --bg-surface: #111827;
+            --bg-surface-hover: #1f2937;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --border-glow: rgba(6, 182, 212, 0.25);
+            
+            --color-text: #f3f4f6;
+            --color-text-muted: #9ca3af;
+            
+            --accent-cyan: #06b6d4;
+            --accent-indigo: #6366f1;
+            --accent-emerald: #10b981;
+            --accent-rose: #f43f5e;
+            --accent-amber: #f59e0b;
+            
+            --glow-cyan: 0 0 15px rgba(6, 182, 212, 0.4);
+            --glow-emerald: 0 0 15px rgba(16, 185, 129, 0.4);
+            --glow-rose: 0 0 15px rgba(244, 63, 94, 0.4);
+            
+            --transition-speed: 0.2s;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--color-text);
+            font-family: 'Outfit', sans-serif;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-base);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-cyan);
+        }
+
+        /* Layout */
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            width: 42px;
+            height: 42px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-indigo));
+            border-radius: 12px;
+            box-shadow: var(--glow-cyan);
+        }
+
+        .logo-icon svg {
+            width: 24px;
+            height: 24px;
+            fill: #fff;
+        }
+
+        .logo-text {
+            font-size: 1.5rem;
+            font-weight: 700;
+            background: linear-gradient(to right, #ffffff, #9ca3af);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .status-panel {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--accent-emerald);
+        }
+
+        .status-badge.offline {
+            background: rgba(244, 63, 94, 0.1);
+            border: 1px solid rgba(244, 63, 94, 0.2);
+            color: var(--accent-rose);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-emerald);
+            animation: pulse 2s infinite;
+        }
+
+        .status-badge.offline .status-dot {
+            background-color: var(--accent-rose);
+            animation: none;
+        }
+
+        .uptime {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: var(--color-text-muted);
+            background: rgba(255, 255, 255, 0.03);
+            padding: 6px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr 1.2fr;
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        @media (max-width: 1024px) {
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Cards */
+        .card {
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            transition: border-color var(--transition-speed);
+        }
+
+        .card:hover {
+            border-color: var(--border-glow);
+        }
+
+        .card-title {
+            font-size: 1.15rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            color: #ffffff;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            padding-bottom: 0.8rem;
+        }
+
+        /* Volume Control */
+        .volume-controls {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            background: rgba(255, 255, 255, 0.02);
+            padding: 1rem;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        .volume-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--accent-cyan);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.1s;
+        }
+
+        .volume-btn:hover {
+            transform: scale(1.1);
+        }
+
+        .volume-slider {
+            flex-grow: 1;
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            outline: none;
+            cursor: pointer;
+        }
+
+        .volume-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow: var(--glow-cyan);
+            border: 2px solid var(--accent-cyan);
+            transition: transform var(--transition-speed);
+        }
+
+        .volume-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        .volume-pct {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            min-width: 45px;
+            text-align: right;
+            color: var(--color-text);
+        }
+
+        /* Playback Controls & Status */
+        .playback-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .btn {
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 600;
+            padding: 12px 20px;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all var(--transition-speed);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, var(--accent-rose), #be123c);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(244, 63, 94, 0.2);
+        }
+        .btn-danger:hover {
+            box-shadow: var(--glow-rose);
+            filter: brightness(1.1);
+        }
+
+        .btn-warning {
+            background: linear-gradient(135deg, var(--accent-amber), #d97706);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
+        }
+        .btn-warning:hover {
+            box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
+            filter: brightness(1.1);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-indigo));
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(6, 182, 212, 0.2);
+        }
+        .btn-primary:hover {
+            box-shadow: var(--glow-cyan);
+            filter: brightness(1.1);
+        }
+
+        .diagnostic-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            padding: 8px 12px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+        }
+
+        .diagnostic-val {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+        }
+
+        .diagnostic-val.healthy {
+            color: var(--accent-emerald);
+        }
+
+        .diagnostic-val.warning {
+            color: var(--accent-amber);
+            animation: pulse 2s infinite;
+        }
+
+        /* Voice Configuration Routing Grid */
+        .voice-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .voice-table th {
+            text-align: left;
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--color-text-muted);
+            padding: 8px 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+        }
+
+        .voice-table td {
+            padding: 12px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            vertical-align: middle;
+        }
+
+        .voice-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .event-type-badge {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 6px;
+            text-transform: uppercase;
+        }
+
+        .badge-message { background: rgba(6, 182, 212, 0.1); color: var(--accent-cyan); border: 1px solid rgba(6, 182, 212, 0.2); }
+        .badge-thinking { background: rgba(99, 102, 241, 0.1); color: var(--accent-indigo); border: 1px solid rgba(99, 102, 241, 0.2); }
+        .badge-tool_use { background: rgba(245, 158, 11, 0.1); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.2); }
+        .badge-tool_result { background: rgba(156, 163, 175, 0.1); color: var(--color-text-muted); border: 1px solid rgba(156, 163, 175, 0.2); }
+        .badge-error { background: rgba(244, 63, 94, 0.1); color: var(--accent-rose); border: 1px solid rgba(244, 63, 94, 0.2); }
+
+        .select-input, .text-input {
+            font-family: inherit;
+            background-color: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-color);
+            color: var(--color-text);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            outline: none;
+            transition: all var(--transition-speed);
+            width: 100%;
+        }
+
+        .select-input:focus, .text-input:focus {
+            border-color: var(--accent-cyan);
+            background-color: rgba(255,255,255,0.05);
+        }
+
+        /* Toggle switch */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(255,255,255,0.1);
+            transition: .3s;
+            border-radius: 24px;
+            border: 1px solid var(--border-color);
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--accent-cyan);
+            box-shadow: 0 0 8px rgba(6, 182, 212, 0.3);
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(20px);
+        }
+
+        .test-action-cell {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .btn-test {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-color);
+            color: var(--color-text);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all var(--transition-speed);
+            white-space: nowrap;
+        }
+
+        .btn-test:hover {
+            background: var(--accent-cyan);
+            color: #000;
+            font-weight: 500;
+            border-color: var(--accent-cyan);
+        }
+
+        /* Sandbox */
+        .sandbox-fields {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-group label {
+            font-size: 0.85rem;
+            color: var(--color-text-muted);
+            font-weight: 500;
+        }
+
+        .textarea-input {
+            font-family: inherit;
+            background-color: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-color);
+            color: var(--color-text);
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            outline: none;
+            transition: all var(--transition-speed);
+            resize: vertical;
+            min-height: 100px;
+            width: 100%;
+        }
+
+        .textarea-input:focus {
+            border-color: var(--accent-cyan);
+            background-color: rgba(255,255,255,0.05);
+        }
+
+        /* Activity Logs Feed */
+        .activity-feed-container {
+            margin-top: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .activity-feed-card {
+            border-radius: 16px;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            padding: 1.5rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            max-height: 400px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .activity-logs {
+            overflow-y: auto;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding-right: 5px;
+            min-height: 250px;
+            max-height: 300px;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 12px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.015);
+            border: 1px solid var(--border-color);
+            align-items: flex-start;
+            font-size: 0.92rem;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .log-timestamp {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: var(--color-text-muted);
+            white-space: nowrap;
+            padding-top: 2px;
+        }
+
+        .log-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 140px;
+        }
+
+        .log-voice {
+            font-size: 0.78rem;
+            color: var(--accent-cyan);
+            font-weight: 500;
+        }
+
+        .log-content {
+            flex-grow: 1;
+            color: #e5e7eb;
+            word-break: break-word;
+        }
+
+        .log-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 200px;
+            color: var(--color-text-muted);
+            font-style: italic;
+        }
+
+        /* Animations */
+        @keyframes pulse {
+            0% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+            }
+            70% {
+                transform: scale(1);
+                box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+            }
+            100% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-container">
+            <div class="logo-icon">
+                <svg viewBox="0 0 24 24">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
+            </div>
+            <span class="logo-text">GenCan SSE</span>
+        </div>
+        <div class="status-panel">
+            <div class="status-badge" id="statusBadge">
+                <span class="status-dot"></span>
+                <span id="statusText">System Operational</span>
+            </div>
+            <div class="uptime" id="uptime">Uptime: 00:00:00</div>
+        </div>
+    </header>
+
+    <div class="dashboard-grid">
+        <!-- Left Column: Playback Controls & Billing Tracker -->
+        <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+            <!-- Playback & Volume Card -->
+            <div class="card">
+                <div class="card-title">
+                    <span>Audio Playback & Controls</span>
+                    <span style="font-size: 0.8rem; background: rgba(6,182,212,0.1); color: var(--accent-cyan); padding: 2px 8px; border-radius: 4px;" id="outputMode">LOCAL MODE</span>
+                </div>
+                
+                <div class="volume-controls">
+                    <button class="volume-btn" id="muteBtn" onclick="toggleMute()">
+                        <!-- Speaker Icon -->
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                        </svg>
+                    </button>
+                    <input type="range" class="volume-slider" id="volumeSlider" min="0" max="100" value="80" oninput="changeVolume(this.value)">
+                    <span class="volume-pct" id="volumePct">80%</span>
+                </div>
+
+                <div class="volume-controls" style="margin-top: 0.8rem;">
+                    <span style="color: var(--accent-cyan); display: flex; align-items: center; justify-content: center; width: 24px;" title="Speech Pace">
+                        <!-- Speed / Clock Icon -->
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                    </span>
+                    <input type="range" class="volume-slider" id="speedSlider" min="50" max="200" value="100" step="5" oninput="changeSpeed(this.value)">
+                    <span class="volume-pct" id="speedVal" style="min-width: 45px;">1.00x</span>
+                </div>
+
+                <div class="playback-controls">
+                    <button class="btn btn-danger" onclick="stopAudio()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        </svg>
+                        Stop Playback
+                    </button>
+                    <button class="btn btn-warning" onclick="flushQueue()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                        Flush Queue
+                    </button>
+                </div>
+
+                <div class="diagnostic-row">
+                    <span>Active Audio Queue Depth</span>
+                    <span class="diagnostic-val" id="queueDepth">0 sentences</span>
+                </div>
+                
+                <div class="diagnostic-row">
+                    <span>TTS Circuit Breaker Status</span>
+                    <span class="diagnostic-val healthy" id="circuitBreaker">Healthy</span>
+                </div>
+            </div>
+
+            <!-- Usage & Billing Tracker Card -->
+            <div class="card">
+                <div class="card-title">
+                    <span>Usage & Billing Tracker</span>
+                    <span style="font-size: 0.8rem; background: rgba(16,185,129,0.1); color: var(--accent-emerald); padding: 2px 8px; border-radius: 4px;">ESTIMATED</span>
+                </div>
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0.8rem 0; gap: 6px;">
+                    <span style="font-size: 0.8rem; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Estimated TTS Cost</span>
+                    <span style="font-size: 2.8rem; font-weight: 700; color: var(--accent-emerald); text-shadow: var(--glow-emerald); line-height: 1;" id="billingCost">$0.00000</span>
+                    <span style="font-size: 0.75rem; color: var(--color-text-muted);">at $15.00 per 1M characters</span>
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 8px;">
+                    <div class="diagnostic-row">
+                        <span>Characters Synthesized</span>
+                        <span class="diagnostic-val" id="billingChars">0 chars</span>
+                    </div>
+                    <div class="diagnostic-row">
+                        <span>API Requests</span>
+                        <span class="diagnostic-val" id="billingRequests">0 (0 failed)</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Service Management Card -->
+            <div class="card">
+                <div class="card-title">
+                    <span>Service Management</span>
+                    <span style="font-size: 0.8rem; background: rgba(244,63,94,0.1); color: var(--accent-rose); padding: 2px 8px; border-radius: 4px;">SYSTEM</span>
+                </div>
+                <p style="font-size: 0.85rem; color: var(--color-text-muted); margin: 0;">Manage the GenCan SSE background service. Note: Stopping the service will shut down this UI.</p>
+                <div class="playback-controls">
+                    <button class="btn btn-warning" onclick="restartService()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+                        </svg>
+                        Restart Service
+                    </button>
+                    <button class="btn btn-danger" onclick="stopService()">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                            <line x1="12" y1="9" x2="12" y2="13"></line>
+                            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                        </svg>
+                        Stop Service
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Interactive Sandbox Card -->
+        <div class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
+            <div>
+                <div class="card-title" style="margin-bottom: 1rem;">Interactive Voice Sandbox</div>
+                
+                <div class="sandbox-fields" style="margin-bottom: 1rem;">
+                    <div class="form-group">
+                        <label for="sandboxVoice">Voice Font</label>
+                        <select class="select-input" id="sandboxVoice">
+                            <option value="Kore">Kore (Calm, main)</option>
+                            <option value="Zephyr">Zephyr (Bright, thinking)</option>
+                            <option value="Puck">Puck (Action, tool calls)</option>
+                            <option value="Charon">Charon (Neutral, results)</option>
+                            <option value="Fenrir">Fenrir (Alert, errors)</option>
+                            <option value="Enceladus">Enceladus (Measured, thoughtful)</option>
+                            <option value="Aoede">Aoede</option>
+                            <option value="Calliope">Calliope</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="sandboxStyle">Style Tag Prefix</label>
+                        <input type="text" class="text-input" id="sandboxStyle" placeholder="e.g. [excited], [alert] ">
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 1rem;">
+                    <label for="sandboxText">Text to Synthesize</label>
+                    <textarea class="textarea-input" id="sandboxText" style="min-height: 130px;" placeholder="Type text here and hit Speak to listen through your local speakers..."></textarea>
+                </div>
+            </div>
+
+            <button class="btn btn-primary" onclick="speakSandboxText()" style="align-self: flex-end;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                Speak Text
+            </button>
+        </div>
+    </div>
+
+    <!-- Voice Configuration Card -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+        <div class="card-title">Voice Routing & Configurations</div>
+        <table class="voice-table">
+            <thead>
+                <tr>
+                    <th>Content Event Type</th>
+                    <th>TTS Voice Font</th>
+                    <th>Style Tag Prefix</th>
+                    <th style="width: 80px; text-align: center;">Enable</th>
+                    <th style="width: 250px;">Voice Testing Sandbox</th>
+                </tr>
+            </thead>
+            <tbody id="voiceConfigsBody">
+                <!-- Will be dynamically populated -->
+                <tr>
+                    <td colspan="5" style="text-align: center; color: var(--color-text-muted); font-style: italic;">Loading voice configurations...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Spoken Activity Feed Card -->
+    <div class="activity-feed-card">
+        <div class="card-title">
+            <span>Live Spoken Activity Feed</span>
+            <span style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: normal;">Updates in real time</span>
+        </div>
+        <div class="activity-logs" id="activityLogs">
+            <div class="log-empty">No speech activity logged yet. Start speaking!</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = ""; // Relative to server
+        let previousVolume = 80;
+        let isMuted = false;
+        let voicesList = ["Kore", "Zephyr", "Puck", "Charon", "Fenrir", "Enceladus", "Aoede", "Calliope"];
+
+        // Poll server status on load and periodically
+        async function fetchStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/api/status`);
+                if (!response.ok) throw new Error("Server response not OK");
+                const status = await response.json();
+                
+                // Update Uptime
+                updateUptimeText(status.uptime_seconds);
+                
+                // Update Status Badge
+                document.getElementById("statusBadge").classList.remove("offline");
+                document.getElementById("statusText").textContent = "System Operational";
+                
+                // Update Volume Slider
+                const volPct = Math.round(status.volume * 100);
+                if (!isMuted) {
+                    document.getElementById("volumeSlider").value = volPct;
+                    document.getElementById("volumePct").textContent = `${volPct}%`;
+                }
+
+                // Update Speed Slider
+                const speed = status.speed || 1.0;
+                if (document.activeElement !== document.getElementById("speedSlider")) {
+                    document.getElementById("speedSlider").value = Math.round(speed * 100);
+                    document.getElementById("speedVal").textContent = `${speed.toFixed(2)}x`;
+                }
+
+                // Update Queue Depth
+                document.getElementById("queueDepth").textContent = `${status.queue_depth} sentence${status.queue_depth === 1 ? '' : 's'}`;
+                
+                // Update Circuit Breaker
+                const cb = document.getElementById("circuitBreaker");
+                if (status.tts_available === false) {
+                    cb.className = "diagnostic-val warning";
+                    cb.textContent = "Unavailable";
+                } else {
+                    cb.className = "diagnostic-val healthy";
+                    cb.textContent = "Healthy";
+                }
+
+                // Update Billing / Usage Stats
+                if (status.usage) {
+                    document.getElementById("billingCost").textContent = `$${status.usage.estimated_cost_usd.toFixed(5)}`;
+                    document.getElementById("billingChars").textContent = `${status.usage.total_characters.toLocaleString()} chars`;
+                    document.getElementById("billingRequests").textContent = `${status.usage.total_requests} (${status.usage.failed_requests} failed)`;
+                }
+
+                // Render voice configurations if not already done, or update
+                if (status.voices) {
+                    renderVoiceConfigs(status.voices);
+                }
+
+            } catch (error) {
+                console.error("Error fetching status:", error);
+                document.getElementById("statusBadge").classList.add("offline");
+                document.getElementById("statusText").textContent = "Offline / Connecting...";
+                document.getElementById("queueDepth").textContent = "N/A";
+                document.getElementById("circuitBreaker").textContent = "N/A";
+                document.getElementById("circuitBreaker").className = "diagnostic-val";
+            }
+        }
+
+        async function fetchLogs() {
+            try {
+                const response = await fetch(`${API_BASE}/api/logs`);
+                if (!response.ok) return;
+                const data = await response.json();
+                renderLogs(data.logs);
+            } catch (error) {
+                console.error("Error fetching logs:", error);
+            }
+        }
+
+        function updateUptimeText(seconds) {
+            const hrs = Math.floor(seconds / 3600).toString().padStart(2, '0');
+            const mins = Math.floor((seconds % 3600) / 60).toString().padStart(2, '0');
+            const secs = (seconds % 60).toString().padStart(2, '0');
+            document.getElementById("uptime").textContent = `Uptime: ${hrs}:${mins}:${secs}`;
+        }
+
+        let voiceConfigsLoaded = false;
+        function renderVoiceConfigs(voices) {
+            // We only rebuild fully on first load to prevent cursor jumps if user is editing style prefix
+            const body = document.getElementById("voiceConfigsBody");
+            
+            if (voiceConfigsLoaded) {
+                // Just update toggles & select selections silently if they aren't currently active/focused
+                Object.keys(voices).forEach(etype => {
+                    const select = document.getElementById(`voice-select-${etype}`);
+                    const toggle = document.getElementById(`voice-toggle-${etype}`);
+                    const styleInput = document.getElementById(`voice-style-${etype}`);
+                    
+                    if (select && document.activeElement !== select) {
+                        select.value = voices[etype].voice;
+                    }
+                    if (toggle && document.activeElement !== toggle) {
+                        toggle.checked = voices[etype].enabled;
+                    }
+                    if (styleInput && document.activeElement !== styleInput) {
+                        styleInput.value = voices[etype].style;
+                    }
+                });
+                return;
+            }
+
+            body.innerHTML = "";
+            Object.keys(voices).forEach(etype => {
+                const config = voices[etype];
+                const tr = document.createElement("tr");
+
+                const badgeClass = `badge-${etype.toLowerCase()}`;
+                
+                tr.innerHTML = `
+                    <td><span class="event-type-badge ${badgeClass}">${etype}</span></td>
+                    <td>
+                        <select class="select-input" id="voice-select-${etype}" onchange="updateVoiceRouting('${etype}')">
+                            ${voicesList.map(v => `<option value="${v}" ${v === config.voice ? 'selected' : ''}>${v}</option>`).join('')}
+                        </select>
+                    </td>
+                    <td>
+                        <input type="text" class="text-input" id="voice-style-${etype}" value="${config.style}" placeholder="None" onchange="updateVoiceRouting('${etype}')">
+                    </td>
+                    <td style="text-align: center;">
+                        <label class="switch">
+                            <input type="checkbox" id="voice-toggle-${etype}" ${config.enabled ? 'checked' : ''} onchange="updateVoiceRouting('${etype}')">
+                            <span class="slider"></span>
+                        </label>
+                    </td>
+                    <td>
+                        <div class="test-action-cell">
+                            <input type="text" class="text-input" id="test-text-${etype}" placeholder="Test phrase..." value="Testing the ${config.voice} voice config.">
+                            <button class="btn-test" onclick="testVoiceRouting('${etype}')">Speak Test</button>
+                        </div>
+                    </td>
+                `;
+                body.appendChild(tr);
+            });
+            
+            voiceConfigsLoaded = true;
+        }
+
+        function renderLogs(logs) {
+            const logsContainer = document.getElementById("activityLogs");
+            if (!logs || logs.length === 0) {
+                logsContainer.innerHTML = '<div class="log-empty">No speech activity logged yet. Start speaking!</div>';
+                return;
+            }
+
+            const currentHTML = logs.map(log => {
+                const time = new Date(log.timestamp * 1000).toLocaleTimeString();
+                const badgeClass = `badge-${log.event_type.toLowerCase()}`;
+                
+                return `
+                    <div class="log-entry">
+                        <span class="log-timestamp">${time}</span>
+                        <div class="log-meta">
+                            <span class="event-type-badge ${badgeClass}">${log.event_type}</span>
+                            <span class="log-voice">${log.voice_name}</span>
+                        </div>
+                        <div class="log-content">${escapeHTML(log.text)}</div>
+                    </div>
+                `;
+            }).reverse().join(""); // Show newest on top
+            
+            logsContainer.innerHTML = currentHTML;
+        }
+
+        function escapeHTML(str) {
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        // Actions
+        async function changeSpeed(val) {
+            const speed = parseFloat(val) / 100;
+            document.getElementById("speedVal").textContent = `${speed.toFixed(2)}x`;
+            
+            try {
+                await fetch(`${API_BASE}/api/speed`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ speed })
+                });
+            } catch (err) {
+                console.error("Speed adjustment failed:", err);
+            }
+        }
+
+        async function restartService() {
+            if (!confirm("Are you sure you want to restart the GenCan SSE service?")) {
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/api/service/restart`, { method: "POST" });
+                if (res.ok) {
+                    alert("Restart command sent. The dashboard will reload in a few seconds.");
+                    setTimeout(() => {
+                        window.location.reload();
+                    }, 3000);
+                } else {
+                    alert("Failed to send restart command.");
+                }
+            } catch (err) {
+                console.error("Restart service failed:", err);
+                alert("Failed to contact the service for restart.");
+            }
+        }
+
+        async function stopService() {
+            if (!confirm("Warning: This will permanently stop the GenCan SSE service. To run it again, you will need to start it via terminal. Proceed?")) {
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/api/service/stop`, { method: "POST" });
+                if (res.ok) {
+                    alert("Stop command sent. The dashboard is now shutting down.");
+                    document.body.innerHTML = "<div style='display:flex;justify-content:center;align-items:center;height:100vh;flex-direction:column;gap:1rem;color:var(--accent-rose);text-align:center;'><h1>Service Stopped</h1><p>The GenCan SSE service has been stopped successfully.</p></div>";
+                } else {
+                    alert("Failed to send stop command.");
+                }
+            } catch (err) {
+                console.error("Stop service failed:", err);
+                alert("Failed to contact the service for stop.");
+            }
+        }
+
+        async function changeVolume(val) {
+            const volume = parseFloat(val) / 100;
+            document.getElementById("volumePct").textContent = `${val}%`;
+            isMuted = false;
+            
+            try {
+                await fetch(`${API_BASE}/api/volume`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ volume })
+                });
+            } catch (err) {
+                console.error("Volume adjustment failed:", err);
+            }
+        }
+
+        function toggleMute() {
+            const slider = document.getElementById("volumeSlider");
+            const btn = document.getElementById("muteBtn");
+            
+            if (isMuted) {
+                // Unmute
+                slider.value = previousVolume;
+                document.getElementById("volumePct").textContent = `${previousVolume}%`;
+                changeVolume(previousVolume);
+                btn.innerHTML = `
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    </svg>
+                `;
+                isMuted = false;
+            } else {
+                // Mute
+                previousVolume = slider.value;
+                slider.value = 0;
+                document.getElementById("volumePct").textContent = `0%`;
+                changeVolume(0);
+                btn.innerHTML = `
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                        <line x1="23" y1="9" x2="17" y2="15"></line>
+                        <line x1="17" y1="9" x2="23" y2="15"></line>
+                    </svg>
+                `;
+                isMuted = true;
+            }
+        }
+
+        async function stopAudio() {
+            try {
+                await fetch(`${API_BASE}/api/stop`, { method: "POST" });
+            } catch (err) {
+                console.error("Stop action failed:", err);
+            }
+        }
+
+        async function flushQueue() {
+            try {
+                await fetch(`${API_BASE}/api/flush`, { 
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ event_type: "" })
+                });
+            } catch (err) {
+                console.error("Flush action failed:", err);
+            }
+        }
+
+        async function updateVoiceRouting(etype) {
+            const voice = document.getElementById(`voice-select-${etype}`).value;
+            const style = document.getElementById(`voice-style-${etype}`).value;
+            const enabled = document.getElementById(`voice-toggle-${etype}`).checked;
+            
+            try {
+                await fetch(`${API_BASE}/api/voice`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        event_type: etype,
+                        voice_name: voice,
+                        style_prefix: style,
+                        enabled: enabled
+                    })
+                });
+            } catch (err) {
+                console.error(`Updating voice routing for ${etype} failed:`, err);
+            }
+        }
+
+        async function testVoiceRouting(etype) {
+            const voice = document.getElementById(`voice-select-${etype}`).value;
+            const style = document.getElementById(`voice-style-${etype}`).value;
+            const text = document.getElementById(`test-text-${etype}`).value;
+            
+            if (!text.trim()) return;
+
+            try {
+                await fetch(`${API_BASE}/api/speak`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text, voice, style })
+                });
+            } catch (err) {
+                console.error(`Testing voice routing for ${etype} failed:`, err);
+            }
+        }
+
+        async function speakSandboxText() {
+            const voice = document.getElementById("sandboxVoice").value;
+            const style = document.getElementById("sandboxStyle").value;
+            const text = document.getElementById("sandboxText").value;
+            
+            if (!text.trim()) return;
+
+            try {
+                await fetch(`${API_BASE}/api/speak`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ text, voice, style })
+                });
+                document.getElementById("sandboxText").value = "";
+            } catch (err) {
+                console.error("Sandbox speech request failed:", err);
+            }
+        }
+
+        // Initialize polling
+        fetchStatus();
+        fetchLogs();
+        setInterval(fetchStatus, 1500);
+        setInterval(fetchLogs, 1500);
+    </script>
+</body>
+</html>

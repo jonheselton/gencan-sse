@@ -191,6 +191,16 @@ Stop current playback and clear the queue immediately.
 
 ---
 
+### `engine.drain(timeout=None) → None`
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `timeout` | `float \| None` | `None` | Max seconds to wait. `None` = wait indefinitely. |
+
+Block until audio queue is empty or timeout expires.
+
+---
+
 ### `engine.stop() → None`
 
 **Shut down the engine.** Stops the background thread and releases PyAudio resources. Waits up to 5 seconds for graceful shutdown.
@@ -420,6 +430,33 @@ engine.speak(
 time.sleep(20)
 engine.stop()
 ```
+
+---
+
+## 9.5 HTTP API Integration
+
+For non-Python projects, gencan-sse provides a REST API via a FastAPI daemon:
+
+```bash
+# Start the server
+gencan-server --port 8765
+```
+
+The server exposes two main endpoints:
+
+- **`POST /speak`** — Direct speech. You control the voice, style, and priority.
+- **`POST /event`** — Structured events. The server handles classification, voice routing, and filtering.
+
+See [API_REFERENCE.md](API_REFERENCE.md) for complete endpoint documentation with schemas and examples.
+
+### When to use `/speak` vs `/event`
+
+| Use Case | Endpoint | Why |
+|----------|----------|-----|
+| MCP tool / screen reader | `/speak` | You already know the text, voice, and priority |
+| Piping LLM stream output | `/event` | Let the server classify, filter, and route voices |
+| Notification system | `/speak` | Direct control over delivery |
+| Gemini CLI integration | `/event` | Handles all event types automatically |
 
 ---
 

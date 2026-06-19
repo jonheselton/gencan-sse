@@ -32,6 +32,35 @@ with SpeechEngine() as engine:
     engine.speak("Hello from GenCan!")
 ```
 
+## HTTP Server
+
+gencan-sse can also run as a standalone HTTP daemon, exposing a REST API for language-agnostic integration:
+
+```bash
+# Install with server support
+pip install -e ".[server]"
+
+# Start the daemon (default: http://127.0.0.1:8765)
+gencan-server
+
+# Or with custom host/port
+gencan-server --host 0.0.0.0 --port 9000
+```
+
+```bash
+# Speak text directly
+curl -X POST http://localhost:8765/speak \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello from the REST API!", "voice": "Kore"}'
+
+# Process a structured event
+curl -X POST http://localhost:8765/event \
+  -H "Content-Type: application/json" \
+  -d '{"event": {"type": "message", "content": "Hello world"}}'
+```
+
+See [API_REFERENCE.md](API_REFERENCE.md) for the full REST API documentation.
+
 ## Installation
 
 ```bash
@@ -133,6 +162,7 @@ engine.stop()
 | `flush_queue(event_type)` | Clear the audio queue |
 | `stop_audio()` | Stop playback and clear queue |
 | `status()` | Get engine status (running, queue depth, volume, etc.) |
+| `drain(timeout)` | Block until audio queue is empty or timeout expires |
 
 ### Environment Variables
 
@@ -158,8 +188,10 @@ Caller (sync)  ──►  MessageQueue  ──►  PlaybackWorker (async thread)
                                      AudioPlayer.enqueue()
                                             │
                                             ▼
-                                     PyAudio playback
+                                      PyAudio playback
 ```
+
+The optional HTTP server (`gencan-server`) wraps this same pipeline behind a FastAPI daemon, exposing `/speak` and `/event` endpoints for language-agnostic access. See [API_REFERENCE.md](API_REFERENCE.md) for details.
 
 ## Relationship to ag-voice
 

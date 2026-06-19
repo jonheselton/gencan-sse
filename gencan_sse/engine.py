@@ -16,6 +16,7 @@ Usage::
 
 from __future__ import annotations
 
+import datetime
 import logging
 import time
 from typing import Optional, TYPE_CHECKING
@@ -132,6 +133,15 @@ class SpeechEngine:
             code_block_chime=self._config.code_block_chime,
         )
 
+        # Activity logging and usage tracking
+        self._activity_log: list[dict] = []
+        self._usage_stats: dict = {
+            "total_characters": 0,
+            "total_requests": 0,
+            "failed_requests": 0,
+            "estimated_cost_usd": 0.0,
+        }
+
         logger.info(
             "SpeechEngine created: tts_provider=%s, volume=%.2f, speed=%.2f",
             self._tts_provider.name,
@@ -227,6 +237,9 @@ class SpeechEngine:
         )
         depth = self._worker.submit(msg)
 
+        self._record_activity(event_type.name, voice, text)
+        self._record_usage(len(text), True)
+
         return SpeakResult(
             status="queued",
             message=f"Queued for synthesis (voice={voice})",
@@ -254,6 +267,9 @@ class SpeechEngine:
 
         msg = EventMessage(event_json=event_json)
         depth = self._worker.submit(msg)
+
+        self._record_activity('EVENT', 'auto', event_json)
+        self._record_usage(len(event_json), True)
 
         return SpeakResult(
             status="queued",
@@ -335,9 +351,9 @@ class SpeechEngine:
         """
         return EngineStatus(
             is_running=self.is_running,
-            queue_depth=len(self._player._heap),
-            volume=self._player._volume if self._player else self._config.volume,
-            speed=self._player._speed if self._player else self._config.speed,
+            queue_depth=self._player.queue_depth,
+            volume=self._player.volume,
+            speed=self._player.speed,
             uptime_seconds=time.time() - self._start_time if self._start_time else 0.0,
             tts_provider=self._tts_provider.name,
             tts_available=self._tts_provider.is_available,
@@ -345,7 +361,76 @@ class SpeechEngine:
                 etype.name: name
                 for etype, (name, _, _) in self._voice_map.items()
             },
+            usage=self.get_usage_stats(),
         )
+
+    # ------------------------------------------------------------------
+    # Activity logging & usage tracking
+    # ------------------------------------------------------------------
+
+    def get_activity_log(self) -> list[dict]:
+        """Return the activity log (most recent entries, up to 50)."""
+        return list(self._activity_log)
+
+    def get_usage_stats(self) -> dict:
+        """Return a copy of the current usage statistics."""
+        return dict(self._usage_stats)
+
+    def _record_activity(
+        self,
+        event_type: str,
+        voice_name: str,
+        text: str,
+        status: str = "success",
+    ) -> None:
+        """Append an entry to the activity log, capped at 50 entries."""
+        entry = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "event_type": event_type,
+            "voice_name": voice_name,
+            "text": text[:200],
+            "status": status,
+        }
+        self._activity_log.append(entry)
+        if len(self._activity_log) > 50:
+            self._activity_log = self._activity_log[-50:]
+
+    def _record_usage(self, text_len: int, success: bool) -> None:
+        """Update usage statistics."""
+        self._usage_stats["total_characters"] += text_len
+        self._usage_stats["total_requests"] += 1
+        if not success:
+            self._usage_stats["failed_requests"] += 1
+        # $15.00 per 1M characters
+        self._usage_stats["estimated_cost_usd"] = (
+            self._usage_stats["total_characters"] * 15.0 / 1_000_000
+        )
+
+    # ------------------------------------------------------------------
+    # Drain
+    # ------------------------------------------------------------------
+
+    def drain(self, timeout: float = 30.0) -> bool:
+        """Block until the audio queue is empty or *timeout* expires.
+
+        Useful when callers need to wait for all queued speech to finish
+        before proceeding (e.g. before program exit).
+
+        Args:
+            timeout: Maximum seconds to wait. Defaults to 30.
+
+        Returns:
+            ``True`` if the queue drained within the timeout,
+            ``False`` if the timeout expired with items still queued.
+        """
+        if not self._is_running:
+            return True
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._player.queue_depth == 0:
+                return True
+            time.sleep(0.1)
+        return False
 
     # ------------------------------------------------------------------
     # Context manager

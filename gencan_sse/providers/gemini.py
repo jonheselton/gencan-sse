@@ -243,7 +243,7 @@ class GeminiTTSProvider:
 
         # Truncate if over API limit
         if text_bytes > MAX_TEXT_BYTES:
-            full_text = full_text[:MAX_TEXT_BYTES]
+            full_text = full_text.encode("utf-8")[:MAX_TEXT_BYTES].decode("utf-8", errors="ignore")
             logger.warning(
                 "Text truncated to %d bytes for TTS API limit", MAX_TEXT_BYTES
             )

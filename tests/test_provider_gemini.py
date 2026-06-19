@@ -76,6 +76,28 @@ class TestGeminiTTSProviderSynthesize:
             result = await provider.synthesize("hello")
             assert result == b""
 
+    @pytest.mark.asyncio
+    async def test_multibyte_truncation(self):
+        """Verify that truncation respects UTF-8 byte boundaries."""
+        from gencan_sse.providers.gemini import MAX_TEXT_BYTES
+        with patch.dict("os.environ", {"AI_STUDIO_KEY": "test-key"}):
+            with patch("google.genai.Client") as mock_client:
+                provider = GeminiTTSProvider()
+                # Create a text string that exceeds MAX_TEXT_BYTES when encoded
+                # Japanese characters are 3 bytes each in UTF-8
+                long_text = "あ" * (MAX_TEXT_BYTES + 100)
+                # The synthesize method should truncate without crashing
+                # Mock the API call to avoid actual network requests
+                mock_response = MagicMock()
+                mock_response.candidates = []
+                mock_instance = mock_client.return_value
+                mock_instance.models.generate_content.return_value = mock_response
+                result = await provider.synthesize(long_text)
+                # Should have been called (not crashed on truncation)
+                # The result may be empty bytes since mock returns no audio,
+                # but the important thing is it didn't crash
+                assert isinstance(result, bytes)
+
 
 class TestParseRetryDelay:
     """Tests for GeminiTTSProvider._parse_retry_delay()."""

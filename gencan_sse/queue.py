@@ -16,6 +16,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 
+from gencan_sse.chunker import chunk_sentences
 from gencan_sse.types import (
     AudioChunk,
     AudioTask,
@@ -228,28 +229,31 @@ class PlaybackWorker:
         if not msg.text or not msg.text.strip():
             return
 
-        async def _synthesize() -> Optional[bytes]:
-            pcm = await self._tts.synthesize(msg.text, msg.voice, msg.style)
-            if not pcm:
-                logger.warning("TTS returned empty response for speak request")
-                from gencan_sse.audio_player import generate_noise
-                pcm = generate_noise(
-                    duration_ms=400,
-                    sample_rate=self._player._sample_rate,
-                    volume=0.15,
-                )
-            return pcm
+        chunks = chunk_sentences(msg.text)
+        for chunk in chunks:
+            async def _synthesize(text=chunk) -> Optional[bytes]:
+                pcm = await self._tts.synthesize(text, msg.voice, msg.style)
+                if not pcm:
+                    logger.warning("TTS returned empty response for speak request")
+                    from gencan_sse.audio_player import generate_noise
+                    pcm = generate_noise(
+                        duration_ms=400,
+                        sample_rate=self._player._sample_rate,
+                        volume=0.15,
+                    )
+                return pcm
 
-        task = AudioTask(
-            task=asyncio.create_task(_synthesize()),
-            priority=msg.priority,
-            event_type=msg.event_type,
-            timestamp=msg.timestamp,
-        )
-        await self._player.enqueue(task)
+            task = AudioTask(
+                task=asyncio.create_task(_synthesize()),
+                priority=msg.priority,
+                event_type=msg.event_type,
+                timestamp=msg.timestamp,
+            )
+            await self._player.enqueue(task)
+
         logger.debug(
-            "Speak task enqueued: voice=%s, priority=%s",
-            msg.voice, msg.priority.name,
+            "Speak request chunked into %d parts: voice=%s, priority=%s",
+            len(chunks), msg.voice, msg.priority.name,
         )
 
     async def _handle_event(self, msg: EventMessage) -> None:
@@ -277,24 +281,26 @@ class PlaybackWorker:
         if not filtered:
             return
 
-        async def _synthesize() -> Optional[bytes]:
-            pcm = await self._tts.synthesize(filtered, voice_name, style_prefix)
-            if not pcm:
-                from gencan_sse.audio_player import generate_noise
-                pcm = generate_noise(
-                    duration_ms=400,
-                    sample_rate=self._player._sample_rate,
-                    volume=0.15,
-                )
-            return pcm
+        chunks = chunk_sentences(filtered)
+        for chunk in chunks:
+            async def _synthesize(text=chunk) -> Optional[bytes]:
+                pcm = await self._tts.synthesize(text, voice_name, style_prefix)
+                if not pcm:
+                    from gencan_sse.audio_player import generate_noise
+                    pcm = generate_noise(
+                        duration_ms=400,
+                        sample_rate=self._player._sample_rate,
+                        volume=0.15,
+                    )
+                return pcm
 
-        task = AudioTask(
-            task=asyncio.create_task(_synthesize()),
-            priority=event.priority,
-            event_type=event.event_type,
-            timestamp=msg.timestamp,
-        )
-        await self._player.enqueue(task)
+            task = AudioTask(
+                task=asyncio.create_task(_synthesize()),
+                priority=event.priority,
+                event_type=event.event_type,
+                timestamp=msg.timestamp,
+            )
+            await self._player.enqueue(task)
 
     async def _handle_control(self, msg: ControlMessage) -> None:
         """Handle a control message."""

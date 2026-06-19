@@ -240,7 +240,7 @@ class EngineConfig:
                 "Install with: pip install pyyaml"
             )
 
-        with open(path, "r") as fh:
+        with open(path, "r", encoding="utf-8") as fh:
             raw = yaml.safe_load(fh)
 
         if not isinstance(raw, dict):

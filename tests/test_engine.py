@@ -200,6 +200,26 @@ class TestSpeechEngineStatus:
         assert status.tts_available is True
         assert status.is_running is False
 
+    def test_status_uses_player_properties(self):
+        """status() should use AudioPlayer's public properties."""
+        mock_provider = MagicMock()
+        mock_provider.name = "mock"
+        mock_provider.is_available = True
+        engine = SpeechEngine(tts_provider=mock_provider)
+        # Set specific values on the player's public properties
+        engine._player = MagicMock()
+        engine._player.queue_depth = 3
+        engine._player.volume = 0.7
+        engine._player.speed = 1.5
+        engine._start_time = 100.0
+        engine._is_running = True
+        engine._worker = MagicMock()
+        engine._worker.is_running = True
+        status = engine.status()
+        assert status.queue_depth == 3
+        assert status.volume == 0.7
+        assert status.speed == 1.5
+
 
 class TestSpeechEngineContextManager:
     """Tests for context manager protocol."""
@@ -219,3 +239,44 @@ class TestSpeechEngineContextManager:
 
         # stop() should have been called
         engine._worker.stop.assert_called_once()
+
+
+class TestSpeechEngineDrain:
+    """Tests for the drain() method."""
+
+    def test_drain_not_running(self):
+        """drain() should return True immediately when engine is not running."""
+        mock_provider = MagicMock()
+        mock_provider.name = "mock"
+        mock_provider.is_available = True
+        engine = SpeechEngine(tts_provider=mock_provider)
+        assert engine.drain(timeout=1.0) is True
+
+    def test_drain_empty_queue(self):
+        """drain() should return True when queue is already empty."""
+        mock_provider = MagicMock()
+        mock_provider.name = "mock"
+        mock_provider.is_available = True
+        engine = SpeechEngine(tts_provider=mock_provider)
+        engine._is_running = True
+        engine._worker = MagicMock()
+        engine._worker.is_running = True
+        # Mock player with queue_depth = 0
+        engine._player = MagicMock()
+        engine._player.queue_depth = 0
+        assert engine.drain(timeout=1.0) is True
+
+    def test_drain_timeout(self):
+        """drain() should return False when timeout expires with items still queued."""
+        mock_provider = MagicMock()
+        mock_provider.name = "mock"
+        mock_provider.is_available = True
+        engine = SpeechEngine(tts_provider=mock_provider)
+        engine._is_running = True
+        engine._worker = MagicMock()
+        engine._worker.is_running = True
+        # Mock player with non-zero queue_depth (always has items)
+        engine._player = MagicMock()
+        engine._player.queue_depth = 5
+        # Use a very short timeout so the test runs fast
+        assert engine.drain(timeout=0.3) is False

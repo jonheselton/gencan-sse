@@ -159,3 +159,4 @@ class EngineStatus:
     tts_provider: str
     tts_available: bool
     voices: dict = field(default_factory=dict)
+    usage: dict = field(default_factory=dict)

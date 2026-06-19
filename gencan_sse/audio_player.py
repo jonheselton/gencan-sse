@@ -316,8 +316,15 @@ class AudioPlayer:
         notify_task = asyncio.create_task(self._notify.wait())
 
         while self._running:
-            # Check heap state without locking first for performance
-            if not self._heap:
+            # Acquire lock and try to pop atomically to avoid TOCTOU race
+            async with self._lock:
+                if self._heap:
+                    entry = heapq.heappop(self._heap)
+                else:
+                    entry = None
+
+            if entry is None:
+                # Heap was empty — wait for notification without holding lock
                 try:
                     await asyncio.wait_for(asyncio.shield(notify_task), timeout=0.5)
                 except asyncio.TimeoutError:
@@ -326,12 +333,6 @@ class AudioPlayer:
                 self._notify.clear()
                 notify_task = asyncio.create_task(self._notify.wait())
                 continue
-
-            # Pop highest priority
-            async with self._lock:
-                if not self._heap:
-                    continue
-                entry = heapq.heappop(self._heap)
 
             audio_task = entry.audio_task
             age = time.time() - audio_task.timestamp
@@ -395,6 +396,18 @@ class AudioPlayer:
         if not notify_task.done():
             notify_task.cancel()
         logger.info("Audio playback loop stopped")
+
+    @property
+    def volume(self) -> float:
+        return self._volume
+
+    @property
+    def speed(self) -> float:
+        return self._speed
+
+    @property
+    def queue_depth(self) -> int:
+        return len(self._heap)
 
     def set_speed(self, speed: float) -> None:
         """Update playback speed dynamically."""
