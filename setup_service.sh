@@ -18,14 +18,14 @@ done
 if [ "$IS_DEV" = true ]; then
     PLIST_NAME="com.gencan.sse.dev.plist"
     PLIST_LABEL="com.gencan.sse.dev"
-    SERVER_ARGS="--dev"
+    SERVER_ARGS="--dev --host 0.0.0.0"
     OUT_LOG="service-dev.log"
     ERR_LOG="service-dev.err"
     echo "=== GenCan SSE Service Setup (DEV Mode) ==="
 else
     PLIST_NAME="com.gencan.sse.plist"
     PLIST_LABEL="com.gencan.sse"
-    SERVER_ARGS=""
+    SERVER_ARGS="--host 0.0.0.0"
     OUT_LOG="service.log"
     ERR_LOG="service.err"
     echo "=== GenCan SSE Service Setup (Production Mode) ==="
