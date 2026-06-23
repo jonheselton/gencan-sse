@@ -16,7 +16,7 @@ class TestEngineConfigDefaults:
         assert config.volume == 0.8
         assert config.speed == 1.0
         assert config.default_voice == "Kore"
-        assert config.max_queue_depth == 5
+        assert config.max_queue_depth == 50
         assert config.code_block_chime is True
 
     def test_default_voices(self):

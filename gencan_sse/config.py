@@ -123,6 +123,7 @@ class EngineConfig:
         ]
     )
     tts_requests_per_minute: float = 10.0
+    tts_round_robin: bool = False
 
     # -- Audio settings ------------------------------------------------------
     sample_rate: int = 24000
@@ -139,14 +140,15 @@ class EngineConfig:
     default_voice: str = "Kore"
 
     # -- Queue settings ------------------------------------------------------
-    max_queue_depth: int = 5
-    stale_timeout_seconds: float = 10.0
+    max_queue_depth: int = 50
+    stale_timeout_seconds: float = 120.0
 
     # -- Filtering -----------------------------------------------------------
     skip_code_blocks: bool = True
     skip_inline_code: bool = True
     skip_urls: bool = True
     min_sentence_length: int = 5
+    target_chunk_size: int = 250
     code_block_chime: bool = True
 
     # -- Class methods -------------------------------------------------------

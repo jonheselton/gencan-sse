@@ -107,6 +107,7 @@ class SpeechEngine:
                 model=self._config.tts_model,
                 fallback_models=self._config.tts_fallback_models,
                 requests_per_minute=self._config.tts_requests_per_minute,
+                round_robin_mode=self._config.tts_round_robin,
             )
 
         # Create audio player
@@ -131,6 +132,8 @@ class SpeechEngine:
             text_filter=self._text_filter,
             voice_map=self._voice_map,
             code_block_chime=self._config.code_block_chime,
+            min_sentence_length=self._config.min_sentence_length,
+            target_chunk_size=self._config.target_chunk_size,
             on_metrics_callback=self._record_chunk_metrics,
         )
 

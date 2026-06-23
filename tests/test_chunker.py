@@ -12,13 +12,16 @@ class TestChunkSentences:
 
     def test_two_sentences(self):
         result = chunk_sentences("Hello world. How are you?")
-        assert len(result) == 2
-        assert result[0] == "Hello world."
-        assert result[1] == "How are you?"
+        # By default groups up to 250 characters
+        assert len(result) == 1
+        assert result[0] == "Hello world. How are you?"
 
     def test_three_sentences(self):
-        result = chunk_sentences("First. Second. Third.")
-        assert len(result) == 3
+        # Override target_chunk_size to force a split
+        result = chunk_sentences("First. Second. Third.", target_chunk_size=15)
+        assert len(result) == 2
+        assert result[0] == "First. Second."
+        assert result[1] == "Third."
 
     def test_exclamation_and_question(self):
         result = chunk_sentences("Wow! Really? Yes.")

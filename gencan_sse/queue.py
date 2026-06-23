@@ -96,6 +96,8 @@ class PlaybackWorker:
         text_filter: TextFilter,
         voice_map: dict[EventType, tuple[str, str, bool]],
         code_block_chime: bool = True,
+        min_sentence_length: int = 5,
+        target_chunk_size: int = 250,
         on_metrics_callback=None,
     ) -> None:
         self._tts = tts_provider
@@ -103,6 +105,8 @@ class PlaybackWorker:
         self._filter = text_filter
         self._voice_map = voice_map
         self._code_block_chime = code_block_chime
+        self._min_sentence_length = min_sentence_length
+        self._target_chunk_size = target_chunk_size
         self._on_metrics = on_metrics_callback
 
         self._queue: queue.Queue = queue.Queue()
@@ -231,7 +235,7 @@ class PlaybackWorker:
         if not msg.text or not msg.text.strip():
             return
 
-        chunks = chunk_sentences(msg.text)
+        chunks = chunk_sentences(msg.text, min_length=self._min_sentence_length, target_chunk_size=self._target_chunk_size)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
                 t0 = time.time()
@@ -290,7 +294,7 @@ class PlaybackWorker:
         if not filtered:
             return
 
-        chunks = chunk_sentences(filtered)
+        chunks = chunk_sentences(filtered, min_length=self._min_sentence_length, target_chunk_size=self._target_chunk_size)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
                 t0 = time.time()

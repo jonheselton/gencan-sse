@@ -265,7 +265,7 @@ class AudioPlayer:
             while len(self._heap) >= self._max_depth:
                 non_errors = [e for e in self._heap if e.audio_task.priority != Priority.ERROR]
                 if non_errors:
-                    victim = max(non_errors, key=lambda e: (e.priority, -e.counter))
+                    victim = max(non_errors, key=lambda e: (e.priority, e.counter))
                     self._heap.remove(victim)
                     if not victim.audio_task.task.done():
                         victim.audio_task.task.cancel()

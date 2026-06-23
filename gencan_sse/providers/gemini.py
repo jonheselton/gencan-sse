@@ -63,6 +63,7 @@ class GeminiTTSProvider:
         circuit_break_threshold: int = 3,
         circuit_break_cooldown: float = 60.0,
         requests_per_minute: float = 10.0,
+        round_robin_mode: bool = False,
     ) -> None:
         """Initialise the Gemini TTS provider.
 
@@ -117,16 +118,21 @@ class GeminiTTSProvider:
 
         self._local_base_url: str | None = os.environ.get("GEMINI_API_BASE_URL")
         self._local_client: Any | None = None
+        self._local_model_name: str = os.environ.get("GEMINI_LOCAL_MODEL", "local-tts")
 
         if self._local_base_url:
-            if "local-tts" not in self._models:
-                self._models.append("local-tts")
+            if self._local_model_name not in self._models:
+                self._models.append(self._local_model_name)
 
         # Resilience state -------------------------------------------------
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._max_retries = max_retries
         self._circuit_break_threshold = circuit_break_threshold
         self._circuit_break_cooldown = circuit_break_cooldown
+        
+        self._round_robin_mode = round_robin_mode
+        self._round_robin_idx = 0
+        self._round_robin_gemini_idx = 0
 
         self._model_states: dict[str, dict[str, float | int]] = {
             m: {"consecutive_failures": 0, "cooldown_until": 0.0}
@@ -166,7 +172,7 @@ class GeminiTTSProvider:
                         self._local_base_url,
                     )
                     self._local_client = genai.Client(
-                        api_key="local_dummy_key",
+                        api_key=os.environ.get("GEMINI_LOCAL_API_KEY", "local_dummy_key"),
                         http_options={"base_url": self._local_base_url},
                     )
 
@@ -382,7 +388,26 @@ class GeminiTTSProvider:
         voice_name: str,
     ) -> tuple[bytes, dict]:
         """Attempt synthesis using each model in priority order."""
-        for model in self._models:
+        models_to_try = self._models
+
+        if getattr(self, "_round_robin_mode", False) and self._models:
+            gemini_models = [m for m in self._models if m != self._local_model_name]
+            has_local = self._local_model_name in self._models
+
+            if has_local and gemini_models:
+                if self._round_robin_idx % 2 == 1:
+                    primary = self._local_model_name
+                else:
+                    primary = gemini_models[self._round_robin_gemini_idx % len(gemini_models)]
+                    self._round_robin_gemini_idx += 1
+                self._round_robin_idx += 1
+                models_to_try = [primary] + [m for m in self._models if m != primary]
+            elif gemini_models:
+                primary = gemini_models[self._round_robin_idx % len(gemini_models)]
+                self._round_robin_idx += 1
+                models_to_try = [primary] + [m for m in self._models if m != primary]
+
+        for model in models_to_try:
             if self.is_model_circuit_open(model):
                 logger.debug(
                     "Model %s circuit is open — trying next fallback", model
@@ -423,7 +448,7 @@ class GeminiTTSProvider:
                 api_t0 = time.time()
 
                 client = (
-                    self._local_client if model == "local-tts" else self._client
+                    self._local_client if model == self._local_model_name else self._client
                 )
                 if not client:
                     raise ValueError(

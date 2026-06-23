@@ -15,7 +15,7 @@ _SENTENCE_SPLIT = re.compile(
 )
 
 
-def chunk_sentences(text: str, min_length: int = 5) -> list[str]:
+def chunk_sentences(text: str, min_length: int = 5, target_chunk_size: int = 250) -> list[str]:
     """Split text into sentence-sized chunks for natural TTS delivery.
 
     Args:
@@ -54,25 +54,22 @@ def chunk_sentences(text: str, min_length: int = 5) -> list[str]:
         # No sentence breaks found — return the whole text as one chunk
         return [text]
 
-    # Merge short fragments into adjacent sentences
+    # Merge short fragments into adjacent sentences and group up to target_chunk_size
     merged: list[str] = []
     buffer = ""
 
     for sentence in raw_sentences:
         if buffer:
-            sentence = buffer + " " + sentence
-            buffer = ""
-
-        if len(sentence) < min_length:
-            buffer = sentence
+            if len(buffer) + 1 + len(sentence) <= target_chunk_size or len(buffer) < min_length:
+                buffer = buffer + " " + sentence
+            else:
+                merged.append(buffer)
+                buffer = sentence
         else:
-            merged.append(sentence)
+            buffer = sentence
 
     # Flush remaining buffer
     if buffer:
-        if merged:
-            merged[-1] = merged[-1] + " " + buffer
-        else:
-            merged.append(buffer)
+        merged.append(buffer)
 
     return merged
