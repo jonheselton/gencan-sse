@@ -28,8 +28,9 @@ dependencies = [
 gemini = ["google-genai", "python-dotenv"]
 yaml = ["pyyaml"]
 server = ["fastapi", "uvicorn", "pydantic"]
-all = ["google-genai", "python-dotenv", "pyyaml", "fastapi", "uvicorn", "pydantic"]
-dev = ["pytest", "pytest-asyncio", "pyyaml", "google-genai", "python-dotenv", "fastapi", "uvicorn", "pydantic", "httpx"]
+macos = ["pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa"]
+all = ["google-genai", "python-dotenv", "pyyaml", "fastapi", "uvicorn", "pydantic", "pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa"]
+dev = ["pytest", "pytest-asyncio", "pyyaml", "google-genai", "python-dotenv", "fastapi", "uvicorn", "pydantic", "httpx", "pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa"]
 
 [project.scripts]
 gencan-server = "gencan_sse.cli:main"
