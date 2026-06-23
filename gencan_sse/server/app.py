@@ -20,7 +20,20 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage the lifecycle of the SpeechEngine."""
     logger.info("Starting SpeechEngine daemon...")
-    engine = SpeechEngine()
+    
+    import os
+    is_dev = os.environ.get("GENCAN_DEV", "false").lower() == "true"
+    tts_provider = None
+    
+    if is_dev:
+        try:
+            from gencan_sse.providers.avfoundation import AVFoundationTTSProvider
+            tts_provider = AVFoundationTTSProvider()
+            logger.info("Dev mode active: initialized AVFoundationTTSProvider.")
+        except Exception as e:
+            logger.error(f"Failed to initialize dev provider: {e}")
+            
+    engine = SpeechEngine(tts_provider=tts_provider)
     engine.start()
     app.state.engine = engine
     yield
