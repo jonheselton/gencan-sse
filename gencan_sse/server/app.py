@@ -284,7 +284,9 @@ async def api_service_stop(req: Request):
     async def do_stop():
         await asyncio.sleep(0.5)
         import subprocess
-        plist_path = os.path.expanduser("~/Library/LaunchAgents/com.jonheselton.gencan-sse.plist")
+        is_dev = os.environ.get("GENCAN_DEV") == "true"
+        plist_name = "com.gencan.sse.dev.plist" if is_dev else "com.gencan.sse.plist"
+        plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{plist_name}")
         try:
             subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", plist_path])
         except Exception:

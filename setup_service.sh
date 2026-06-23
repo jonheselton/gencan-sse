@@ -5,10 +5,31 @@ set -e
 # Determine the absolute path of the project directory
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-PLIST_NAME="com.gencan.sse.plist"
 LOG_DIR="$HOME/Library/Logs/gencan-sse"
 
-echo "=== GenCan SSE Service Setup ==="
+# Parse arguments
+IS_DEV=false
+for arg in "$@"; do
+    if [ "$arg" = "--dev" ]; then
+        IS_DEV=true
+    fi
+done
+
+if [ "$IS_DEV" = true ]; then
+    PLIST_NAME="com.gencan.sse.dev.plist"
+    PLIST_LABEL="com.gencan.sse.dev"
+    SERVER_ARGS="--dev"
+    OUT_LOG="service-dev.log"
+    ERR_LOG="service-dev.err"
+    echo "=== GenCan SSE Service Setup (DEV Mode) ==="
+else
+    PLIST_NAME="com.gencan.sse.plist"
+    PLIST_LABEL="com.gencan.sse"
+    SERVER_ARGS=""
+    OUT_LOG="service.log"
+    ERR_LOG="service.err"
+    echo "=== GenCan SSE Service Setup (Production Mode) ==="
+fi
 
 # 1. Verify virtual environment exists
 if [ ! -f "$PROJECT_DIR/.venv/bin/gencan-server" ]; then
@@ -29,12 +50,12 @@ cat <<EOF > "$LAUNCH_AGENTS_DIR/$PLIST_NAME"
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.gencan.sse</string>
+    <string>$PLIST_LABEL</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/zsh</string>
         <string>-c</string>
-        <string>source \$HOME/.zshrc; exec $PROJECT_DIR/.venv/bin/gencan-server</string>
+        <string>source \$HOME/.zshrc; exec $PROJECT_DIR/.venv/bin/gencan-server $SERVER_ARGS</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -43,9 +64,9 @@ cat <<EOF > "$LAUNCH_AGENTS_DIR/$PLIST_NAME"
     <key>WorkingDirectory</key>
     <string>$PROJECT_DIR</string>
     <key>StandardOutPath</key>
-    <string>$LOG_DIR/service.log</string>
+    <string>$LOG_DIR/$OUT_LOG</string>
     <key>StandardErrorPath</key>
-    <string>$LOG_DIR/service.err</string>
+    <string>$LOG_DIR/$ERR_LOG</string>
 </dict>
 </plist>
 EOF
@@ -64,9 +85,9 @@ echo "GenCan SSE service has been installed and started!"
 echo "It is configured to run automatically when you log in."
 echo ""
 echo "Verify status:"
-echo "  launchctl list | grep com.gencan.sse"
+echo "  launchctl list | grep $PLIST_LABEL"
 echo ""
 echo "View logs:"
-echo "  tail -f $LOG_DIR/service.log"
-echo "  tail -f $LOG_DIR/service.err"
+echo "  tail -f $LOG_DIR/$OUT_LOG"
+echo "  tail -f $LOG_DIR/$ERR_LOG"
 echo "--------------------------------------------------"

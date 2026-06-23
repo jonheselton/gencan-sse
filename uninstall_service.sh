@@ -3,13 +3,32 @@
 set -e
 
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
-PLIST_NAME="com.gencan.sse.plist"
 LOG_DIR="$HOME/Library/Logs/gencan-sse"
 
-echo "=== GenCan SSE Service Uninstall & Cleanup ==="
+# Parse arguments
+IS_DEV=false
+for arg in "$@"; do
+    if [ "$arg" = "--dev" ]; then
+        IS_DEV=true
+    fi
+done
+
+if [ "$IS_DEV" = true ]; then
+    PLIST_NAME="com.gencan.sse.dev.plist"
+    PLIST_LABEL="com.gencan.sse.dev"
+    OUT_LOG="service-dev.log"
+    ERR_LOG="service-dev.err"
+    echo "=== GenCan SSE Service Uninstall & Cleanup (DEV Mode) ==="
+else
+    PLIST_NAME="com.gencan.sse.plist"
+    PLIST_LABEL="com.gencan.sse"
+    OUT_LOG="service.log"
+    ERR_LOG="service.err"
+    echo "=== GenCan SSE Service Uninstall & Cleanup (Production Mode) ==="
+fi
 
 # 1. Unload the service if it's loaded
-if launchctl list 2>/dev/null | grep -q "com.gencan.sse"; then
+if launchctl list 2>/dev/null | grep -q "$PLIST_LABEL"; then
     echo "Service is currently running. Unloading..."
     launchctl unload "$LAUNCH_AGENTS_DIR/$PLIST_NAME" 2>/dev/null || true
     echo "Service unloaded."
@@ -25,12 +44,20 @@ else
     echo "No plist file found at $LAUNCH_AGENTS_DIR/$PLIST_NAME."
 fi
 
-# 3. Clean up log directory and files
-if [ -d "$LOG_DIR" ]; then
-    echo "Removing logs and log directory: $LOG_DIR"
-    rm -rf "$LOG_DIR"
-else
-    echo "No log directory found at $LOG_DIR."
+# 3. Clean up specific log files
+if [ -f "$LOG_DIR/$OUT_LOG" ]; then
+    echo "Removing log file: $LOG_DIR/$OUT_LOG"
+    rm "$LOG_DIR/$OUT_LOG"
+fi
+if [ -f "$LOG_DIR/$ERR_LOG" ]; then
+    echo "Removing log file: $LOG_DIR/$ERR_LOG"
+    rm "$LOG_DIR/$ERR_LOG"
+fi
+
+# Clean up log directory if it is empty
+if [ -d "$LOG_DIR" ] && [ -z "$(ls -A "$LOG_DIR")" ]; then
+    echo "Removing empty log directory: $LOG_DIR"
+    rmdir "$LOG_DIR"
 fi
 
 echo "--------------------------------------------------"
