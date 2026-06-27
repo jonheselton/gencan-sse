@@ -114,16 +114,14 @@ class EngineConfig:
     tts_model: str = "gemini-3.1-flash-tts-preview"
     tts_fallback_models: list[str] = field(
         default_factory=lambda: [
-            "gemini-3.1-flash-tts",
             "gemini-3.1-flash-tts-preview",
-            "gemini-2.5-flash-tts",
             "gemini-2.5-flash-preview-tts",
-            "gemini-2.5-pro-tts",
             "gemini-2.5-pro-preview-tts",
         ]
     )
     tts_requests_per_minute: float = 10.0
     tts_round_robin: bool = False
+    jonbox_base_url: Optional[str] = None
 
     # -- Audio settings ------------------------------------------------------
     sample_rate: int = 24000
@@ -138,6 +136,12 @@ class EngineConfig:
         default_factory=lambda: dict(_DEFAULT_VOICES)
     )
     default_voice: str = "Kore"
+
+    # -- IP Voice routing ----------------------------------------------------
+    premium_voice_pool: list[str] = field(
+        default_factory=lambda: ['aoede', 'callirrhoe', 'charon', 'fenrir']
+    )
+    ip_voice_timeout_hours: float = 2.0
 
     # -- Queue settings ------------------------------------------------------
     max_queue_depth: int = 50

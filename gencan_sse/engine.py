@@ -37,6 +37,7 @@ from gencan_sse.queue import (
 )
 from gencan_sse.filters import TextFilter
 from gencan_sse.audio_player import AudioPlayer
+from gencan_sse.voice_router import VoiceRouter
 
 if TYPE_CHECKING:
     from gencan_sse.providers.base import TTSProvider
@@ -125,12 +126,19 @@ class SpeechEngine:
         # Create text filter
         self._text_filter = TextFilter()
 
+        # Create voice router
+        self._voice_router = VoiceRouter(
+            voice_pool=self._config.premium_voice_pool,
+            timeout_hours=self._config.ip_voice_timeout_hours,
+        )
+
         # Create playback worker (not started yet)
         self._worker = PlaybackWorker(
             tts_provider=self._tts_provider,
             audio_player=self._player,
             text_filter=self._text_filter,
             voice_map=self._voice_map,
+            voice_router=self._voice_router,
             code_block_chime=self._config.code_block_chime,
             min_sentence_length=self._config.min_sentence_length,
             target_chunk_size=self._config.target_chunk_size,
@@ -207,6 +215,7 @@ class SpeechEngine:
         style: str = "",
         priority: Priority = Priority.RESPONSE,
         event_type: EventType = EventType.MESSAGE,
+        client_ip: str | None = None,
     ) -> SpeakResult:
         """Speak text aloud.
 
@@ -241,6 +250,7 @@ class SpeechEngine:
             style=style,
             priority=priority,
             event_type=event_type,
+            client_ip=client_ip,
         )
         depth = self._worker.submit(msg)
 
@@ -253,7 +263,7 @@ class SpeechEngine:
             queue_depth=depth,
         )
 
-    def speak_event(self, event_json: str) -> SpeakResult:
+    def speak_event(self, event_json: str, client_ip: str | None = None) -> SpeakResult:
         """Process a structured JSON event through the full pipeline.
 
         The event is classified, filtered, chunked, synthesized, and played
@@ -272,7 +282,7 @@ class SpeechEngine:
                 message="Engine is not running. Call engine.start() first.",
             )
 
-        msg = EventMessage(event_json=event_json)
+        msg = EventMessage(event_json=event_json, client_ip=client_ip)
         depth = self._worker.submit(msg)
 
         self._record_activity('EVENT', 'auto', event_json)

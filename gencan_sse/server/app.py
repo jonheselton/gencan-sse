@@ -21,19 +21,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage the lifecycle of the SpeechEngine."""
     logger.info("Starting SpeechEngine daemon...")
     
-    tts_provider = None
-    try:
-        from gencan_sse.providers.avfoundation import AVFoundationTTSProvider
-        local_provider = AVFoundationTTSProvider()
-        if local_provider.is_available:
-            tts_provider = local_provider
-            logger.info("Initialized SpeechEngine with preferred local AVFoundation provider.")
-        else:
-            logger.info("Local AVFoundation provider unavailable, defaulting to Gemini.")
-    except Exception as e:
-        logger.error(f"Failed to initialize local provider: {e}")
-            
-    engine = SpeechEngine(tts_provider=tts_provider)
+    # We will let SpeechEngine default to GeminiTTSProvider
+    # which has our local-tts fallback logic.
+    engine = SpeechEngine(tts_provider=None)
     engine.start()
     app.state.engine = engine
     yield
@@ -104,6 +94,7 @@ async def speak(request: SpeakRequest, req: Request):
         style=request.style,
         priority=priority,
         event_type=event_type,
+        client_ip=req.client.host if req.client else None,
     )
     return {"status": result.status, "queue_depth": result.queue_depth}
 
@@ -113,7 +104,8 @@ async def process_event(request: EventRequest, req: Request):
     """Process a structured event (e.g. from an LLM stream) for filtering, classification, and speech."""
     engine = get_engine(req)
     import json
-    result = engine.speak_event(json.dumps(request.event))
+    client_ip = req.client.host if req.client else None
+    result = engine.speak_event(json.dumps(request.event), client_ip=client_ip)
     return {"status": result.status, "queue_depth": result.queue_depth}
 
 

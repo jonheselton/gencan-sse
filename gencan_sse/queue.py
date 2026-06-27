@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from gencan_sse.providers.base import TTSProvider
     from gencan_sse.audio_player import AudioPlayer
     from gencan_sse.filters import TextFilter
+    from gencan_sse.voice_router import VoiceRouter
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ class SpeakMessage:
     priority: Priority = Priority.RESPONSE
     event_type: EventType = EventType.MESSAGE
     timestamp: float = field(default_factory=time.time)
+    client_ip: Optional[str] = None
 
 
 @dataclass
@@ -54,6 +56,7 @@ class EventMessage:
     """A structured event to process through the full pipeline."""
     event_json: str
     timestamp: float = field(default_factory=time.time)
+    client_ip: Optional[str] = None
 
 
 @dataclass
@@ -95,6 +98,7 @@ class PlaybackWorker:
         audio_player: AudioPlayer,
         text_filter: TextFilter,
         voice_map: dict[EventType, tuple[str, str, bool]],
+        voice_router: 'Optional[VoiceRouter]' = None,
         code_block_chime: bool = True,
         min_sentence_length: int = 5,
         target_chunk_size: int = 250,
@@ -104,6 +108,7 @@ class PlaybackWorker:
         self._player = audio_player
         self._filter = text_filter
         self._voice_map = voice_map
+        self._voice_router = voice_router
         self._code_block_chime = code_block_chime
         self._min_sentence_length = min_sentence_length
         self._target_chunk_size = target_chunk_size
@@ -235,6 +240,9 @@ class PlaybackWorker:
         if not msg.text or not msg.text.strip():
             return
 
+        if self._voice_router and msg.client_ip:
+            msg.voice = self._voice_router.get_voice_for_ip(msg.client_ip)
+
         chunks = chunk_sentences(msg.text, min_length=self._min_sentence_length, target_chunk_size=self._target_chunk_size)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
@@ -285,6 +293,9 @@ class PlaybackWorker:
 
         if not enabled:
             return
+
+        if self._voice_router and msg.client_ip:
+            voice_name = self._voice_router.get_voice_for_ip(msg.client_ip)
 
         # Code block chime
         if is_code_block(event.text) and self._code_block_chime:
