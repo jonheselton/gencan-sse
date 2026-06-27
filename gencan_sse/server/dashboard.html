@@ -737,6 +737,12 @@
                     <span style="font-size: 0.8rem; background: rgba(244,63,94,0.1); color: var(--accent-rose); padding: 2px 8px; border-radius: 4px;">SYSTEM</span>
                 </div>
                 <p style="font-size: 0.85rem; color: var(--color-text-muted); margin: 0;">Manage the GenCan SSE background service. Note: Stopping the service will shut down this UI.</p>
+                <div class="form-group" style="margin-top: 1rem; margin-bottom: 0.5rem;">
+                    <label for="providerSelect">Active TTS Provider</label>
+                    <select class="select-input" id="providerSelect" onchange="changeProvider(this.value)">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
                 <div class="playback-controls">
                     <button class="btn btn-warning" onclick="restartService()">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1156,6 +1162,41 @@
             }
         }
 
+        async function fetchProviders() {
+            try {
+                const res = await fetch(`${API_BASE}/api/providers`);
+                if (!res.ok) return;
+                const data = await res.json();
+                
+                const select = document.getElementById("providerSelect");
+                // Only rewrite options if not focused, to avoid interrupting selection
+                if (document.activeElement !== select) {
+                    select.innerHTML = data.available.map(p => 
+                        `<option value="${p}" ${p === data.current ? 'selected' : ''}>${p}</option>`
+                    ).join("");
+                }
+            } catch (err) {
+                console.error("Failed to fetch providers:", err);
+            }
+        }
+
+        async function changeProvider(val) {
+            try {
+                const res = await fetch(`${API_BASE}/api/provider`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ provider: val })
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    alert(err.message || "Failed to change provider");
+                }
+                fetchProviders(); // refresh
+            } catch (err) {
+                console.error("Failed to change provider:", err);
+            }
+        }
+
         async function stopAudio() {
             try {
                 await fetch(`${API_BASE}/api/stop`, { method: "POST" });
@@ -1236,8 +1277,10 @@
 
         // Initialize polling
         fetchStatus();
+        fetchProviders();
         fetchLogs();
         setInterval(fetchStatus, 1500);
+        setInterval(fetchProviders, 15000);
         setInterval(fetchLogs, 1500);
     </script>
 </body>

@@ -180,12 +180,35 @@ async def api_status(req: Request):
         "speed": status.speed,
         "uptime_seconds": int(status.uptime_seconds),
         "tts_available": status.tts_available,
+        "tts_provider": getattr(status, "tts_provider", "Unknown"),
         "tts_circuit_open": False,  # TODO: wire to provider circuit breaker
         "tts_cooldown_remaining": 0,
         "audio_output_mode": "local",
         "voices": voices_data,
         "usage": status.usage,
     })
+
+
+@app.get("/api/providers", summary="Get available TTS providers")
+async def api_providers(req: Request):
+    """Returns available TTS providers."""
+    engine = get_engine(req)
+    return JSONResponse({
+        "current": getattr(engine.status(), "tts_provider", "Unknown"),
+        "available": engine.get_available_providers()
+    })
+
+
+@app.post("/api/provider", summary="Set current TTS provider")
+async def api_provider(req: Request):
+    """Change the active TTS provider."""
+    engine = get_engine(req)
+    data = await req.json()
+    provider_name = data.get("provider", "")
+    success = engine.set_tts_provider(provider_name)
+    if success:
+        return JSONResponse({"status": "success", "message": f"Provider switched to {provider_name}"})
+    return JSONResponse({"status": "error", "message": "Failed to switch provider"}, status_code=400)
 
 
 @app.get("/api/logs", summary="Get activity logs")

@@ -379,5 +379,11 @@ class PlaybackWorker:
                 self._player._heap.clear()
             logger.debug("Queue cleared via stop control")
 
+        elif action == "set_provider":
+            new_provider = msg.payload.get("provider")
+            if new_provider:
+                self._tts = new_provider
+                logger.info("TTS provider switched to %s", new_provider.name)
+
         else:
             logger.warning("Unknown control action: %s", action)

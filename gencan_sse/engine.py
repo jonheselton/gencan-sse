@@ -366,6 +366,40 @@ class SpeechEngine:
         """Stop current playback and clear the queue."""
         self._worker.submit(ControlMessage(action="stop"))
 
+    def get_available_providers(self) -> list[str]:
+        """Get a list of available TTS provider names."""
+        return ["Gemini", "Kokoro", "Jonbox", "AVFoundation"]
+
+    def set_tts_provider(self, provider_name: str) -> bool:
+        """Switch the TTS provider at runtime."""
+        provider_name = provider_name.lower()
+        provider = None
+        
+        if provider_name == "kokoro":
+            from gencan_sse.providers.kokoro import KokoroTTSProvider
+            provider = KokoroTTSProvider()
+        elif provider_name == "gemini":
+            from gencan_sse.providers.gemini import GeminiTTSProvider
+            provider = GeminiTTSProvider(
+                model=self._config.tts_model,
+                fallback_models=self._config.tts_fallback_models,
+                requests_per_minute=self._config.tts_requests_per_minute,
+                round_robin_mode=self._config.tts_round_robin,
+            )
+        elif provider_name == "jonbox":
+            from gencan_sse.providers.jonbox import JonboxTTSProvider
+            provider = JonboxTTSProvider(base_url=self._config.jonbox_base_url)
+        elif provider_name == "avfoundation":
+            from gencan_sse.providers.avfoundation import AVFoundationTTSProvider
+            provider = AVFoundationTTSProvider()
+            
+        if provider:
+            self._tts_provider = provider
+            self._worker.submit(ControlMessage(action="set_provider", payload={"provider": provider}))
+            logger.info("Engine TTS provider switched to %s", provider.name)
+            return True
+        return False
+
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
