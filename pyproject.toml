@@ -28,9 +28,9 @@ dependencies = [
 gemini = ["google-genai", "python-dotenv"]
 yaml = ["pyyaml"]
 server = ["fastapi", "uvicorn", "pydantic"]
-macos = ["pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa"]
-all = ["google-genai", "python-dotenv", "pyyaml", "fastapi", "uvicorn", "pydantic", "pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa"]
-dev = ["pytest", "pytest-asyncio", "pyyaml", "google-genai", "python-dotenv", "fastapi", "uvicorn", "pydantic", "httpx", "pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa"]
+macos = ["pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa", "mlx-audio"]
+all = ["google-genai", "python-dotenv", "pyyaml", "fastapi", "uvicorn", "pydantic", "pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa", "mlx-audio"]
+dev = ["pytest", "pytest-asyncio", "pyyaml", "google-genai", "python-dotenv", "fastapi", "uvicorn", "pydantic", "httpx", "pyobjc-framework-AVFoundation", "pyobjc-framework-Cocoa", "mlx-audio"]
 
 [project.scripts]
 gencan-server = "gencan_sse.cli:main"

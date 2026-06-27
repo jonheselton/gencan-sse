@@ -103,13 +103,23 @@ class SpeechEngine:
         if tts_provider is not None:
             self._tts_provider = tts_provider
         else:
-            from gencan_sse.providers.gemini import GeminiTTSProvider
-            self._tts_provider = GeminiTTSProvider(
-                model=self._config.tts_model,
-                fallback_models=self._config.tts_fallback_models,
-                requests_per_minute=self._config.tts_requests_per_minute,
-                round_robin_mode=self._config.tts_round_robin,
-            )
+            import sys
+            
+            # Prefer Kokoro on macOS if installed
+            if sys.platform == "darwin":
+                from gencan_sse.providers.kokoro import KokoroTTSProvider
+                provider = KokoroTTSProvider()
+                if provider.is_available:
+                    self._tts_provider = provider
+            
+            if not hasattr(self, "_tts_provider"):
+                from gencan_sse.providers.gemini import GeminiTTSProvider
+                self._tts_provider = GeminiTTSProvider(
+                    model=self._config.tts_model,
+                    fallback_models=self._config.tts_fallback_models,
+                    requests_per_minute=self._config.tts_requests_per_minute,
+                    round_robin_mode=self._config.tts_round_robin,
+                )
 
         # Create audio player
         self._player = AudioPlayer(
