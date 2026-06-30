@@ -13,7 +13,6 @@ from gencan_sse.providers.gemini import GeminiTTSProvider
 from gencan_sse.providers.jonbox import JonboxTTSProvider
 from gencan_sse.providers.kokoro import KokoroTTSProvider
 from gencan_sse.providers.avfoundation import AVFoundationTTSProvider
-from gencan_sse.providers.vertex import VertexTTSProvider  # theoretical
 
 __all__ = [
     "TTSProvider",
@@ -21,5 +20,4 @@ __all__ = [
     "JonboxTTSProvider",
     "KokoroTTSProvider",
     "AVFoundationTTSProvider",
-    "VertexTTSProvider",
 ]

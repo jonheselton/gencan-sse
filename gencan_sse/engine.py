@@ -375,9 +375,8 @@ class SpeechEngine:
         2. Jonbox       — self-hosted Coqui VITS
         3. Kokoro       — local Metal-accelerated (MLX)
         4. AVFoundation — macOS native, offline fallback
-        5. Vertex AI    — cloud (theoretical, disabled due to cost)
         """
-        return ["Gemini", "Jonbox", "Kokoro", "AVFoundation", "Vertex AI"]
+        return ["Gemini", "Jonbox", "Kokoro", "AVFoundation"]
 
     def set_tts_provider(self, provider_name: str) -> bool:
         """Switch the TTS provider at runtime."""
@@ -401,10 +400,6 @@ class SpeechEngine:
         elif provider_name == "avfoundation":
             from gencan_sse.providers.avfoundation import AVFoundationTTSProvider
             provider = AVFoundationTTSProvider()
-        elif provider_name in ("vertex", "vertex_ai", "vertex ai"):
-            from gencan_sse.providers.vertex import VertexTTSProvider
-            provider = VertexTTSProvider()
-            logger.warning("Vertex AI provider is theoretical — expect higher costs.")
 
         if provider:
             self._tts_provider = provider
