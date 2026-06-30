@@ -256,12 +256,7 @@ class PlaybackWorker:
 
                 if not pcm:
                     logger.warning("TTS returned empty response for speak request")
-                    from gencan_sse.audio_player import generate_noise
-                    pcm = generate_noise(
-                        duration_ms=400,
-                        sample_rate=self._player._sample_rate,
-                        volume=0.15,
-                    )
+                    await self._player.enqueue_error_chime()
                 return pcm
 
             task = AudioTask(
@@ -317,12 +312,8 @@ class PlaybackWorker:
                     self._on_metrics({"latency_ms": latency * 1000, "audio_bytes": len(pcm) if pcm else 0})
 
                 if not pcm:
-                    from gencan_sse.audio_player import generate_noise
-                    pcm = generate_noise(
-                        duration_ms=400,
-                        sample_rate=self._player._sample_rate,
-                        volume=0.15,
-                    )
+                    logger.warning("TTS returned empty response for event chunk")
+                    await self._player.enqueue_error_chime()
                 return pcm
 
             task = AudioTask(

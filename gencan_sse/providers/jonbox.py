@@ -58,40 +58,63 @@ class JonboxTTSProvider:
         try:
             import re
             import time
+            import httpx
+            import base64
             api_t0 = time.time()
             request_text = re.sub(r"^\[[^\]]*\]\s*", "", full_text)
             
-            response = await asyncio.to_thread(
-                self._client.models.generate_content,
-                model="jonbox-tts",
-                contents=request_text,
-                config={
-                    "response_modalities": ["AUDIO"],
-                    "speech_config": {
-                        "voice_config": {
-                            "prebuilt_voice_config": {"voice_name": voice}
-                        }
-                    },
-                },
-            )
-            api_elapsed = time.time() - api_t0
-
-            if (
-                response and response.candidates and 
-                response.candidates[0].content and 
-                response.candidates[0].content.parts
-            ):
-                for part in response.candidates[0].content.parts:
-                    if part.inline_data and part.inline_data.data:
-                        audio_bytes = len(part.inline_data.data)
-                        return part.inline_data.data, {
-                            "model": "jonbox-tts",
-                            "provider": self.name,
-                            "latency_ms": api_elapsed * 1000,
-                            "audio_bytes": audio_bytes,
-                        }
+            # Map Gemini voice names to Coqui voice names if needed
+            vmap = {
+                "kore": "jenny",
+                "zephyr": "p303",
+                "enceladus": "p303",
+                "puck": "p294",
+                "charon": "p310",
+                "fenrir": "ljspeech"
+            }
+            mapped_voice = vmap.get(voice.lower().strip(), "jenny")
             
-            logger.warning("Jonbox TTS response contained no audio data.")
+            payload = {
+                "contents": [{"parts": [{"text": request_text}]}],
+                "speech_config": {
+                    "voice_config": {
+                        "prebuilt_voice_config": {"voice_name": mapped_voice}
+                    }
+                }
+            }
+            
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{self._base_url}/v1beta/models/jonbox-tts:generateContent",
+                    json=payload,
+                    timeout=60.0
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                
+            api_elapsed = time.time() - api_t0
+            
+            pcm_data = b""
+            if (
+                data.get("candidates") and 
+                data["candidates"][0].get("content") and 
+                data["candidates"][0]["content"].get("parts")
+            ):
+                for part in data["candidates"][0]["content"]["parts"]:
+                    if part.get("inlineData") and part["inlineData"].get("data"):
+                        encoded_audio = part["inlineData"]["data"]
+                        pcm_data = base64.b64decode(encoded_audio)
+                        break
+                
+            if pcm_data:
+                return pcm_data, {
+                    "model": "jonbox-coqui",
+                    "provider": self.name,
+                    "latency_ms": api_elapsed * 1000,
+                    "audio_bytes": len(pcm_data),
+                }
+            
+            logger.warning("Jonbox TTS returned empty audio.")
             return b"", {}
         except Exception as exc:
             logger.warning("Jonbox TTS failed: %s", exc)

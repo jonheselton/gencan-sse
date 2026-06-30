@@ -50,6 +50,18 @@ class KokoroTTSProvider:
         if not self._available or not self._generate_fn or not text.strip():
             return b"", {}
 
+        # Map ag-voice names to valid Kokoro voice IDs
+        voice_map = {
+            "Kore": "af_heart",
+            "Zephyr": "af_alloy",
+            "Puck": "am_puck",
+            "Charon": "am_echo",
+            "Fenrir": "am_fenrir"
+        }
+        actual_voice = voice_map.get(voice, voice)
+        if actual_voice not in ["af_heart", "af_alloy", "af_jessica", "am_puck", "am_fenrir", "am_echo"]:
+            actual_voice = "af_heart"  # safe fallback
+
         full_text = f"{style}{text}" if style else text
 
         try:
@@ -65,19 +77,23 @@ class KokoroTTSProvider:
             await asyncio.to_thread(
                 self._generate_fn,
                 text=full_text,
-                model_path=self._model_path,
-                voice=voice,
+                model=self._model_path,
+                voice=actual_voice,
                 speed=1.0,
                 audio_format="wav",
-                file_prefix=tmp_path.replace(".wav", "")
+                file_prefix=tmp_path.replace(".wav", ""),
+                save=True
             )
             
-            # The generate_audio function might append .wav to the prefix
+            # The generate_audio function might append _000.wav or .wav to the prefix
             actual_path = tmp_path
-            if not os.path.exists(actual_path) and os.path.exists(f"{tmp_path}.wav"):
+            prefix = tmp_path.replace(".wav", "")
+            if os.path.exists(f"{prefix}_000.wav"):
+                actual_path = f"{prefix}_000.wav"
+            elif not os.path.exists(actual_path) and os.path.exists(f"{tmp_path}.wav"):
                 actual_path = f"{tmp_path}.wav"
-            elif not os.path.exists(actual_path) and os.path.exists(tmp_path.replace(".wav", "") + ".wav"):
-                actual_path = tmp_path.replace(".wav", "") + ".wav"
+            elif not os.path.exists(actual_path) and os.path.exists(prefix + ".wav"):
+                actual_path = prefix + ".wav"
 
             pcm_data = b""
             if os.path.exists(actual_path):

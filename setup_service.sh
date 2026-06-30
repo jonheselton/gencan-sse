@@ -51,11 +51,6 @@ cat <<EOF > "$LAUNCH_AGENTS_DIR/$PLIST_NAME"
 <dict>
     <key>Label</key>
     <string>$PLIST_LABEL</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>GEMINI_API_BASE_URL</key>
-        <string>http://jonbox:8001</string>
-    </dict>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/zsh</string>

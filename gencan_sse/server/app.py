@@ -7,8 +7,9 @@ import time
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel
 from gencan_sse.engine import SpeechEngine
 from gencan_sse.types import Priority, EventType
 from gencan_sse.server.models import SpeakRequest, EventRequest, ControlRequest, StatusResponse
@@ -71,8 +72,81 @@ async def serve_dashboard():
 
 
 # -------------------------------------------------------------------------
-# REST API — Speak & Events
+# REST API — Speak, Events, Chat & Stream
 # -------------------------------------------------------------------------
+
+class ChatRequest(BaseModel):
+    text: str
+    
+@app.post("/chat", summary="Interactive chat endpoint")
+async def chat(request: ChatRequest, req: Request):
+    """Sends text to Gemini AI, streams output to TTS engine, and returns full text."""
+    from google import genai
+    from google.genai import types
+    import json
+    
+    api_key = os.environ.get("AI_STUDIO_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Gemini API key not configured")
+        
+    client = genai.Client(api_key=api_key)
+    engine = get_engine(req)
+    
+    # Send thinking event to audio queue
+    engine.speak_event(json.dumps({"type": "thinking", "content": "Thinking..."}), client_ip=req.client.host if req.client else None)
+    
+    try:
+        # Use gemini-2.5-flash as default for fast chat
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model='gemini-2.5-flash',
+            contents=request.text,
+        )
+        full_text = response.text
+        
+        # Send message event to TTS engine
+        engine.speak_event(json.dumps({"type": "message", "content": full_text}), client_ip=req.client.host if req.client else None)
+        
+        return {"status": "ok", "response": full_text}
+    except Exception as e:
+        logger.error("Error in chat endpoint: %s", e)
+        engine.speak_event(json.dumps({"type": "error", "message": f"Chat error: {e}"}))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.websocket("/stream")
+async def stream_audio(websocket: WebSocket):
+    """WebSocket endpoint to stream audio directly to clients as WAV chunks."""
+    from gencan_sse.wav_generator import wrap_pcm_to_wav
+    await websocket.accept()
+    engine = get_engine(websocket)
+    audio_player = engine._player
+    
+    q = audio_player.subscribe(maxsize=100)
+    logger.info("WebSocket audio subscriber connected")
+    
+    # We will use the resampled rate that AudioPlayer is outputting
+    hardware_rate = audio_player._hardware_rate
+    
+    try:
+        while True:
+            chunk = await q.get()
+            # Wrap the PCM chunk in a WAV header so clients can easily play it
+            wav_chunk = wrap_pcm_to_wav(
+                chunk,
+                sample_rate=hardware_rate,
+                sample_width=audio_player._sample_width,
+                channels=audio_player._channels
+            )
+            await websocket.send_bytes(wav_chunk)
+    except WebSocketDisconnect:
+        logger.info("WebSocket audio subscriber disconnected")
+    except Exception as e:
+        logger.warning("WebSocket streaming error: %s", e)
+    finally:
+        audio_player.unsubscribe(q)
+
+
 
 @app.post("/speak", summary="Speak raw text")
 async def speak(request: SpeakRequest, req: Request):

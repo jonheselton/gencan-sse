@@ -129,7 +129,7 @@ class EngineConfig:
     channels: int = 1  # mono
     volume: float = 0.8
     speed: float = 1.0
-    output_device: Optional[str] = None
+    output_device: Optional[str] = "SABRE"
 
     # -- Voice routing -------------------------------------------------------
     voices: dict[str, VoiceMapping] = field(

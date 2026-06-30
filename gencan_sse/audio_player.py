@@ -184,6 +184,9 @@ class AudioPlayer:
         self._stream = None
         self._running = False
         self._last_event_type: Optional[EventType] = None
+        
+        # Audio stream pub/sub
+        self._subscribers: set[asyncio.Queue[bytes]] = set()
 
         # Pre-generate chime
         self._chime_pcm = generate_chime(
@@ -292,6 +295,23 @@ class AudioPlayer:
         )
         await self.enqueue(task)
 
+    async def enqueue_error_chime(self) -> None:
+        """Enqueue a low-pitch error tone."""
+        async def _chime_pcm() -> bytes:
+            return generate_chime(
+                frequency=150.0,
+                duration_ms=300,
+                sample_rate=self._sample_rate,
+                volume=0.4,
+            )
+
+        task = AudioTask(
+            task=asyncio.create_task(_chime_pcm()),
+            priority=Priority.ERROR,
+            event_type=EventType.ERROR,
+        )
+        await self.enqueue(task)
+
     async def flush_event_type(self, old_type: EventType) -> None:
         """Flush queued entries of a specific event type on transition."""
         async with self._lock:
@@ -379,10 +399,20 @@ class AudioPlayer:
 
             # Play
             try:
+                target_rate = int(self._sample_rate * self._speed)
+                resampled_pcm = resample_pcm(pcm, target_rate, self._hardware_rate)
+
+                # Broadcast to network subscribers
+                if self._subscribers:
+                    for q in list(self._subscribers):
+                        try:
+                            # Non-blocking put; if queue is full, drop chunk for this client
+                            q.put_nowait(resampled_pcm)
+                        except asyncio.QueueFull:
+                            pass
+
                 if self._stream:
                     play_t0 = time.time()
-                    target_rate = int(self._sample_rate * self._speed)
-                    resampled_pcm = resample_pcm(pcm, target_rate, self._hardware_rate)
                     await asyncio.to_thread(self._stream.write, resampled_pcm)
                     play_elapsed = time.time() - play_t0
                     logger.debug("Played %d bytes in %.3fs (priority=%s, type=%s, age=%.1fs, remaining=%d)",
@@ -408,6 +438,16 @@ class AudioPlayer:
     @property
     def queue_depth(self) -> int:
         return len(self._heap)
+
+    def subscribe(self, maxsize: int = 100) -> asyncio.Queue[bytes]:
+        """Subscribe to the audio stream. Returns an asyncio.Queue of PCM bytes."""
+        q = asyncio.Queue(maxsize=maxsize)
+        self._subscribers.add(q)
+        return q
+        
+    def unsubscribe(self, q: asyncio.Queue[bytes]) -> None:
+        """Unsubscribe from the audio stream."""
+        self._subscribers.discard(q)
 
     def set_speed(self, speed: float) -> None:
         """Update playback speed dynamically."""

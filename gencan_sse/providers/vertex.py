@@ -1,7 +1,15 @@
 """Vertex AI TTS provider for gencan-sse.
 
 Uses the Gemini API via google-genai but routes through Vertex AI
-for self-hosted model usage. Inherits resilience features from GeminiTTSProvider.
+for self-hosted model usage. Inherits all resilience features from
+:class:`GeminiTTSProvider` (circuit breaker, rate limiting, fallback
+models, retry with exponential backoff).
+
+.. note::
+
+    This provider is **theoretical / disabled by default** due to the
+    higher cost of Vertex AI inference.  It is included for future use
+    when budget or enterprise billing is available.
 """
 
 import logging
@@ -14,7 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 class VertexTTSProvider(GeminiTTSProvider):
-    """Vertex AI wrapper for TTS."""
+    """Vertex AI wrapper for TTS.
+
+    Subclass of :class:`GeminiTTSProvider` that routes requests through
+    Google Cloud Vertex AI.  **Currently theoretical** — not included
+    in the default provider fallback chain due to expense.
+    """
 
     def __init__(
         self,

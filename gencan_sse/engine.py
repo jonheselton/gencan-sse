@@ -105,12 +105,13 @@ class SpeechEngine:
         else:
             import sys
             
-            # Prefer Kokoro on macOS if installed
-            if sys.platform == "darwin":
-                from gencan_sse.providers.kokoro import KokoroTTSProvider
-                provider = KokoroTTSProvider()
-                if provider.is_available:
-                    self._tts_provider = provider
+            # Prefer Kokoro on macOS if installed (Disabled to fall back to Gemini)
+            # if sys.platform == "darwin":
+            #     from gencan_sse.providers.kokoro import KokoroTTSProvider
+            #     provider = KokoroTTSProvider()
+            #     if provider.is_available:
+            #         self._tts_provider = provider
+
             
             if not hasattr(self, "_tts_provider"):
                 from gencan_sse.providers.gemini import GeminiTTSProvider
@@ -367,8 +368,16 @@ class SpeechEngine:
         self._worker.submit(ControlMessage(action="stop"))
 
     def get_available_providers(self) -> list[str]:
-        """Get a list of available TTS provider names."""
-        return ["Gemini", "Kokoro", "Jonbox", "AVFoundation"]
+        """Get a list of available TTS provider names.
+
+        Returned in priority / fallback order:
+        1. Gemini       — cloud, primary
+        2. Jonbox       — self-hosted Coqui VITS
+        3. Kokoro       — local Metal-accelerated (MLX)
+        4. AVFoundation — macOS native, offline fallback
+        5. Vertex AI    — cloud (theoretical, disabled due to cost)
+        """
+        return ["Gemini", "Jonbox", "Kokoro", "AVFoundation", "Vertex AI"]
 
     def set_tts_provider(self, provider_name: str) -> bool:
         """Switch the TTS provider at runtime."""
@@ -388,11 +397,15 @@ class SpeechEngine:
             )
         elif provider_name == "jonbox":
             from gencan_sse.providers.jonbox import JonboxTTSProvider
-            provider = JonboxTTSProvider(base_url=self._config.jonbox_base_url)
+            provider = JonboxTTSProvider(base_url=self._config.jonbox_base_url or "http://localhost:8080")
         elif provider_name == "avfoundation":
             from gencan_sse.providers.avfoundation import AVFoundationTTSProvider
             provider = AVFoundationTTSProvider()
-            
+        elif provider_name in ("vertex", "vertex_ai", "vertex ai"):
+            from gencan_sse.providers.vertex import VertexTTSProvider
+            provider = VertexTTSProvider()
+            logger.warning("Vertex AI provider is theoretical — expect higher costs.")
+
         if provider:
             self._tts_provider = provider
             self._worker.submit(ControlMessage(action="set_provider", payload={"provider": provider}))

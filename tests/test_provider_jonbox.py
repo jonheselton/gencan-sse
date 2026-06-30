@@ -1,7 +1,7 @@
 """Tests for gencan_sse.providers.jonbox module."""
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
@@ -49,20 +49,38 @@ class TestJonboxTTSProviderSynthesize:
         
     @pytest.mark.asyncio
     async def test_synthesize_success(self):
-        with patch("google.genai.Client") as mock_client:
-            mock_instance = mock_client.return_value
-            mock_response = MagicMock()
-            mock_part = MagicMock()
-            mock_part.inline_data.data = b"audio_data"
-            mock_response.candidates = [MagicMock(content=MagicMock(parts=[mock_part]))]
-            mock_instance.models.generate_content.return_value = mock_response
+        import base64
+        encoded_data = base64.b64encode(b"audio_data").decode("utf-8")
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inlineData": {
+                                    "data": encoded_data
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
 
-            provider = JonboxTTSProvider(base_url="http://localhost:8080")
-            result, metadata = await provider.synthesize("Hello")
-            
-            assert result == b"audio_data"
-            assert metadata["provider"] == "jonbox"
-            assert metadata["model"] == "jonbox-tts"
-            assert metadata["audio_bytes"] == len(b"audio_data")
+        with patch("google.genai.Client"):
+            with patch("httpx.AsyncClient") as mock_http_client:
+                mock_instance = MagicMock()
+                mock_instance.post = AsyncMock(return_value=mock_response)
+                mock_http_client.return_value.__aenter__.return_value = mock_instance
 
-            mock_instance.models.generate_content.assert_called_once()
+                provider = JonboxTTSProvider(base_url="http://localhost:8080")
+                result, metadata = await provider.synthesize("Hello")
+                
+                assert result == b"audio_data"
+                assert metadata["provider"] == "jonbox"
+                assert metadata["model"] == "jonbox-coqui"
+                assert metadata["audio_bytes"] == len(b"audio_data")
+
+                mock_instance.post.assert_called_once()
