@@ -64,6 +64,8 @@ class KokoroTTSProvider:
 
         full_text = f"{style}{text}" if style else text
 
+        tmp_path = None
+        actual_path = None
         try:
             import asyncio
             api_t0 = time.time()
@@ -101,10 +103,6 @@ class KokoroTTSProvider:
                     # Read frames. Note: Kokoro is typically 24kHz.
                     # Our base provider expects 16-bit signed PCM.
                     pcm_data = wf.readframes(wf.getnframes())
-                os.remove(actual_path)
-            
-            if tmp_path != actual_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
 
             api_elapsed = time.time() - api_t0
             
@@ -121,3 +119,14 @@ class KokoroTTSProvider:
         except Exception as exc:
             logger.warning("Kokoro TTS failed: %s", exc)
             return b"", {}
+        finally:
+            if actual_path and os.path.exists(actual_path):
+                try:
+                    os.remove(actual_path)
+                except Exception as e:
+                    logger.debug("Failed to remove actual temp WAV path: %s", e)
+            if tmp_path and tmp_path != actual_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception as e:
+                    logger.debug("Failed to remove temp WAV path: %s", e)

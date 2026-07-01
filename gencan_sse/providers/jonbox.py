@@ -18,6 +18,7 @@ class JonboxTTSProvider:
         """Initialise the Jonbox TTS provider."""
         self._base_url = base_url
         self._client: Any | None = None
+        self._httpx_client = None
         
         if not self._base_url:
             logger.warning("Jonbox base URL not provided. TTS will return silence.")
@@ -83,14 +84,15 @@ class JonboxTTSProvider:
                 }
             }
             
-            async with httpx.AsyncClient() as client:
-                resp = await client.post(
-                    f"{self._base_url}/v1beta/models/jonbox-tts:generateContent",
-                    json=payload,
-                    timeout=60.0
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            if self._httpx_client is None:
+                self._httpx_client = httpx.AsyncClient()
+            resp = await self._httpx_client.post(
+                f"{self._base_url}/v1beta/models/jonbox-tts:generateContent",
+                json=payload,
+                timeout=60.0
+            )
+            resp.raise_for_status()
+            data = resp.json()
                 
             api_elapsed = time.time() - api_t0
             

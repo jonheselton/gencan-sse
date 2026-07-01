@@ -21,19 +21,36 @@ _EVENT_MAP: dict[str, tuple[EventType, Priority]] = {
 _SKIP_TYPES = {"init", "result"}
 
 
+def _to_string(val) -> str:
+    """Recursively convert structured elements (lists, dicts) or other types to flat strings."""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, dict):
+        parts = []
+        for k, v in val.items():
+            if v is not None:
+                parts.append(f"{k}: {_to_string(v)}")
+        return ", ".join(parts)
+    if isinstance(val, (list, tuple, set)):
+        return " ".join(_to_string(item) for item in val if item is not None)
+    return str(val)
+
+
 def _extract_text(event_type: str, data: dict) -> str:
     """Extract the speakable text from a parsed event based on its type."""
     if event_type == "message":
-        return data.get("content", "")
+        return _to_string(data.get("content", ""))
     elif event_type == "tool_use":
         tool_name = data.get("tool", "unknown tool")
         return f"Running {tool_name}"
     elif event_type == "tool_result":
-        return data.get("output", "")
+        return _to_string(data.get("output", ""))
     elif event_type == "error":
-        return data.get("message", "An error occurred")
+        return _to_string(data.get("message", "An error occurred"))
     elif event_type == "thinking":
-        return data.get("content", "")
+        return _to_string(data.get("content", ""))
     return ""
 
 
@@ -49,7 +66,9 @@ def classify(raw_line: str) -> ClassifiedEvent:
         A ClassifiedEvent with the appropriate type, text, and priority.
     """
     raw_line = raw_line.strip()
-    if not raw_line:
+    if not raw_line or len(raw_line) > 100_000:
+        if len(raw_line) > 100_000:
+            logger.warning("raw_line too long (%d chars), skipping classification.", len(raw_line))
         return ClassifiedEvent(
             event_type=EventType.SKIP,
             text="",
@@ -73,7 +92,7 @@ def classify(raw_line: str) -> ClassifiedEvent:
         return ClassifiedEvent(
             event_type=EventType.SKIP,
             text="",
-            raw=data if isinstance(data, dict) else {},
+            raw={},
             priority=Priority.THINKING,
         )
 

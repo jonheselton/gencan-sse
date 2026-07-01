@@ -40,7 +40,7 @@ def main():
         import os
         os.environ["GENCAN_DEV"] = "true"
         # Only override port and log level if they weren't explicitly passed in command-line arguments
-        if not any(arg.startswith("--port") for arg in sys.argv):
+        if not any(arg == "--port" or arg.startswith("--port=") for arg in sys.argv):
             args.port = 8766
         if not any(arg.startswith("--log-level") for arg in sys.argv):
             args.log_level = "debug"

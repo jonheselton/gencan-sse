@@ -71,8 +71,11 @@ class TestJonboxTTSProviderSynthesize:
 
         with patch("google.genai.Client"):
             with patch("httpx.AsyncClient") as mock_http_client:
+                mock_post = AsyncMock(return_value=mock_response)
+                mock_http_client.return_value.post = mock_post
+                # Keep compatibility with context manager mocking if needed
                 mock_instance = MagicMock()
-                mock_instance.post = AsyncMock(return_value=mock_response)
+                mock_instance.post = mock_post
                 mock_http_client.return_value.__aenter__.return_value = mock_instance
 
                 provider = JonboxTTSProvider(base_url="http://localhost:8080")
@@ -83,4 +86,4 @@ class TestJonboxTTSProviderSynthesize:
                 assert metadata["model"] == "jonbox-coqui"
                 assert metadata["audio_bytes"] == len(b"audio_data")
 
-                mock_instance.post.assert_called_once()
+                mock_post.assert_called_once()

@@ -1,12 +1,22 @@
-"""Audio Player module — async PCM playback with priority queue."""
-
+import array
 import asyncio
 import heapq
 import logging
 import math
 import struct
+import threading
 import time
 from typing import Optional
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    import audioop
+except ImportError:
+    audioop = None
 
 from gencan_sse.types import (
     AudioChunk,
@@ -36,6 +46,18 @@ def generate_chime(
         Raw PCM bytes (16-bit signed, mono).
     """
     num_samples = int(sample_rate * duration_ms / 1000)
+    if np is not None:
+        t = np.arange(num_samples) / sample_rate
+        # Vectorized fade-in/fade-out envelope
+        fade_samples = int(num_samples * 0.1)
+        envelope = np.ones(num_samples, dtype=np.float32)
+        if fade_samples > 0:
+            envelope[:fade_samples] = np.arange(fade_samples) / fade_samples
+            envelope[-fade_samples:] = np.arange(fade_samples, 0, -1) / fade_samples
+        samples_np = 32767.0 * volume * envelope * np.sin(2.0 * np.pi * frequency * t)
+        samples_np = np.clip(samples_np, -32768, 32767).astype(np.int16)
+        return samples_np.tobytes()
+
     samples = []
     for i in range(num_samples):
         t = i / sample_rate
@@ -48,7 +70,7 @@ def generate_chime(
             envelope = (num_samples - i) / fade_samples
         sample = int(32767 * volume * envelope * math.sin(2.0 * math.pi * frequency * t))
         samples.append(max(-32768, min(32767, sample)))
-    return struct.pack(f"<{len(samples)}h", *samples)
+    return array.array('h', samples).tobytes()
 
 
 def generate_noise(
@@ -73,7 +95,7 @@ def generate_noise(
         val = random.uniform(-1.0, 1.0)
         sample = int(32767 * volume * val)
         samples.append(max(-32768, min(32767, sample)))
-    return struct.pack(f"<{len(samples)}h", *samples)
+    return array.array('h', samples).tobytes()
 
 
 def apply_volume(pcm_data: bytes, volume: float) -> bytes:
@@ -90,6 +112,12 @@ def apply_volume(pcm_data: bytes, volume: float) -> bytes:
         return pcm_data
     if volume <= 0.0:
         return b"\x00" * len(pcm_data)
+
+    if audioop is not None:
+        try:
+            return audioop.mul(pcm_data, 2, volume)
+        except Exception:
+            pass
 
     num_samples = len(pcm_data) // 2
     samples = struct.unpack(f"<{num_samples}h", pcm_data[:num_samples * 2])
@@ -110,18 +138,23 @@ def resample_pcm(pcm_data: bytes, from_rate: int, to_rate: int) -> bytes:
     num_samples_out = int(num_samples_in * to_rate / from_rate)
     
     step = from_rate / to_rate
-    out_samples = [samples[int(i * step)] for i in range(num_samples_out)]
+    out_samples = [samples[max(0, min(num_samples_in - 1, int(i * step)))] for i in range(num_samples_out)]
     return struct.pack(f"<{num_samples_out}h", *out_samples)
+
+
+def _safe_put(q: asyncio.Queue[bytes], data: bytes) -> None:
+    try:
+        q.put_nowait(data)
+    except asyncio.QueueFull:
+        pass
 
 
 class _PriorityEntry:
     """Wrapper for heap queue ordering."""
-    _counter = 0
 
-    def __init__(self, audio_task: AudioTask):
-        _PriorityEntry._counter += 1
+    def __init__(self, audio_task: AudioTask, counter: int):
         self.priority = audio_task.priority.value
-        self.counter = _PriorityEntry._counter
+        self.counter = counter
         self.audio_task = audio_task
 
     def __lt__(self, other):
@@ -177,16 +210,21 @@ class AudioPlayer:
 
         # Priority heap + async notification
         self._heap: list[_PriorityEntry] = []
-        self._notify = asyncio.Event()
-        self._lock = asyncio.Lock()
+        self._entry_counter = 0
+        self._notify: Optional[asyncio.Event] = None
+        self._lock: Optional[asyncio.Lock] = None
 
         self._pyaudio = None
         self._stream = None
         self._running = False
         self._last_event_type: Optional[EventType] = None
+        self._write_task: Optional[asyncio.Task] = None
+        self._using_desired_device = False
+        self._last_init_attempt_time = 0.0
         
         # Audio stream pub/sub
-        self._subscribers: set[asyncio.Queue[bytes]] = set()
+        self._subscribers: set[tuple[asyncio.Queue[bytes], asyncio.AbstractEventLoop]] = set()
+        self._subscribers_lock = threading.Lock()
 
         # Pre-generate chime
         self._chime_pcm = generate_chime(
@@ -198,9 +236,35 @@ class AudioPlayer:
 
         self._init_pyaudio(output_device)
 
+    def init_async_primitives(self) -> None:
+        """Initialize asyncio primitives (Event and Lock) on the current event loop."""
+        if self._notify is None:
+            self._notify = asyncio.Event()
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+
+    def _cleanup_pyaudio_sync(self) -> None:
+        """Synchronously clean up existing stream and PyAudio instances."""
+        if self._stream:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+            except Exception as e:
+                logger.debug("Error closing stream in cleanup: %s", e)
+            self._stream = None
+
+        if self._pyaudio:
+            try:
+                self._pyaudio.terminate()
+            except Exception as e:
+                logger.debug("Error terminating PyAudio in cleanup: %s", e)
+            self._pyaudio = None
+
     def _init_pyaudio(self, device_name: Optional[str]) -> None:
         """Initialize PyAudio with optional device selection."""
         logger.debug("_init_pyaudio: device_name=%r", device_name)
+        self._last_init_attempt_time = time.time()
+        self._cleanup_pyaudio_sync()
         try:
             import pyaudio
             self._pyaudio = pyaudio.PyAudio()
@@ -218,6 +282,11 @@ class AudioPlayer:
                         break
                 if device_index is None:
                     logger.warning("Device '%s' not found. Using default.", device_name)
+                    self._using_desired_device = False
+                else:
+                    self._using_desired_device = True
+            else:
+                self._using_desired_device = True
 
             if device_index is not None:
                 device_info = self._pyaudio.get_device_info_by_index(device_index)
@@ -241,12 +310,16 @@ class AudioPlayer:
             logger.debug("_init_pyaudio: stream opened successfully, device_index=%s", device_index)
         except ImportError:
             logger.warning("PyAudio not installed. Running in silent mode.")
+            self._using_desired_device = False
         except Exception as e:
             logger.warning("Failed to initialize audio: %s. Silent mode.", e)
             logger.debug("_init_pyaudio: exception details", exc_info=True)
+            self._using_desired_device = False
 
     async def enqueue(self, audio_task: AudioTask) -> None:
         """Add an AudioTask to the priority queue. Non-blocking."""
+        if self._lock is None:
+            self.init_async_primitives()
         async with self._lock:
             # Evict stale entries
             now = time.time()
@@ -262,22 +335,30 @@ class AudioPlayer:
                 if not e.audio_task.task.done():
                     e.audio_task.task.cancel()
 
-            self._heap = fresh_entries
+            self._entry_counter += 1
+            new_entry = _PriorityEntry(audio_task, self._entry_counter)
+            candidates = fresh_entries + [new_entry]
 
-            # Enforce max depth — drop oldest non-error entries
-            while len(self._heap) >= self._max_depth:
-                non_errors = [e for e in self._heap if e.audio_task.priority != Priority.ERROR]
-                if non_errors:
-                    victim = max(non_errors, key=lambda e: (e.priority, e.counter))
-                    self._heap.remove(victim)
-                    if not victim.audio_task.task.done():
-                        victim.audio_task.task.cancel()
+            # Enforce max depth — drop oldest/lowest priority non-error entries
+            drop_count = len(candidates) - self._max_depth
+            if drop_count > 0:
+                non_errors = [e for e in candidates if e.audio_task.priority != Priority.ERROR]
+                # sort so that lowest priority (largest value -> smallest negative) and oldest (smallest counter) are first
+                non_errors.sort(key=lambda e: (-e.priority, e.counter))
+                to_drop_count = min(drop_count, len(non_errors))
+                evicted = non_errors[:to_drop_count]
+                for e in evicted:
+                    if not e.audio_task.task.done():
+                        e.audio_task.task.cancel()
                     logger.debug("Evicted stale/low-priority entry from queue")
-                else:
-                    break
+                survivors = [e for e in candidates if e.audio_task.priority == Priority.ERROR] + non_errors[to_drop_count:]
+            else:
+                survivors = candidates
 
-            heapq.heappush(self._heap, _PriorityEntry(audio_task))
-            heapq.heapify(self._heap)  # Re-sort after stale eviction
+            # Atomic assignment to self._heap
+            new_heap = list(survivors)
+            heapq.heapify(new_heap)
+            self._heap = new_heap
 
         self._notify.set()
         logger.debug("Enqueued AudioTask: priority=%s, queue_depth=%d",
@@ -314,6 +395,8 @@ class AudioPlayer:
 
     async def flush_event_type(self, old_type: EventType) -> None:
         """Flush queued entries of a specific event type on transition."""
+        if self._lock is None:
+            self.init_async_primitives()
         async with self._lock:
             surviving = []
             for e in self._heap:
@@ -328,62 +411,102 @@ class AudioPlayer:
 
     async def play_loop(self) -> None:
         """Continuously play from priority queue. Run as background task."""
+        self.init_async_primitives()
         self._running = True
         logger.info("Audio playback loop started (priority mode)")
         logger.debug("play_loop: has_stream=%s, volume=%.2f, max_depth=%d, stale_timeout=%.1f",
                      self._stream is not None, self._volume, self._max_depth, self._stale_timeout)
 
-        notify_task = asyncio.create_task(self._notify.wait())
-
+        current_entry = None
         while self._running:
-            # Acquire lock and try to pop atomically to avoid TOCTOU race
-            async with self._lock:
-                if self._heap:
-                    entry = heapq.heappop(self._heap)
-                else:
-                    entry = None
+            if current_entry is None:
+                # Acquire lock and try to pop atomically to avoid TOCTOU race
+                async with self._lock:
+                    if self._heap:
+                        current_entry = heapq.heappop(self._heap)
+                    else:
+                        current_entry = None
 
-            if entry is None:
+            if current_entry is None:
                 # Heap was empty — wait for notification without holding lock
-                try:
-                    await asyncio.wait_for(asyncio.shield(notify_task), timeout=0.5)
-                except asyncio.TimeoutError:
-                    continue
-                # Notified
-                self._notify.clear()
                 notify_task = asyncio.create_task(self._notify.wait())
+                try:
+                    await asyncio.wait_for(notify_task, timeout=0.5)
+                    # Notified
+                    self._notify.clear()
+                except asyncio.TimeoutError:
+                    pass
+                finally:
+                    if not notify_task.done():
+                        notify_task.cancel()
+                        try:
+                            await notify_task
+                        except asyncio.CancelledError:
+                            pass
                 continue
 
-            audio_task = entry.audio_task
+            audio_task = current_entry.audio_task
             age = time.time() - audio_task.timestamp
 
             if age > self._stale_timeout and audio_task.priority != Priority.ERROR:
                 if not audio_task.task.done():
                     audio_task.task.cancel()
+                current_entry = None
                 continue
 
             # Await synthesis with preemption
-            done, pending = await asyncio.wait(
-                [audio_task.task, notify_task],
-                return_when=asyncio.FIRST_COMPLETED
-            )
-
-            if notify_task in done:
-                # A new item was enqueued. Re-evaluate priorities.
-                async with self._lock:
-                    heapq.heappush(self._heap, entry)
-                self._notify.clear()
+            preempted = False
+            while not audio_task.task.done() and self._running:
                 notify_task = asyncio.create_task(self._notify.wait())
+                try:
+                    done, pending = await asyncio.wait(
+                        [audio_task.task, notify_task],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+
+                    if notify_task in done:
+                        if not self._running:
+                            break
+                        # A new item was enqueued. Re-evaluate priorities.
+                        # Only preempt and push current_entry back to the heap if the new item is indeed higher priority.
+                        async with self._lock:
+                            if self._heap and self._heap[0] < current_entry:
+                                heapq.heappush(self._heap, current_entry)
+                                preempted = True
+                                self._notify.clear()
+                                break
+                            else:
+                                self._notify.clear()
+                finally:
+                    if not notify_task.done():
+                        notify_task.cancel()
+                        try:
+                            await notify_task
+                        except asyncio.CancelledError:
+                            pass
+
+            if not self._running:
+                if not audio_task.task.done():
+                    audio_task.task.cancel()
+                current_entry = None
+                continue
+
+            if preempted:
+                current_entry = None
                 continue
 
             # Synthesis completed
             try:
                 pcm = audio_task.task.result()
             except asyncio.CancelledError:
+                current_entry = None
                 continue
             except Exception as e:
                 logger.warning("Synthesis task failed: %s", e)
+                current_entry = None
                 continue
+
+            current_entry = None
 
             if not pcm:
                 continue
@@ -394,26 +517,37 @@ class AudioPlayer:
                 continue
 
             # Apply volume
-            pcm = apply_volume(pcm, self._volume) if self._volume < 1.0 else pcm
-            duration_est = len(pcm) / (self._sample_rate * self._sample_width)
+            if self._volume < 1.0:
+                pcm = await asyncio.to_thread(apply_volume, pcm, self._volume)
 
             # Play
             try:
+                now = time.time()
+                if (self._stream is None or not self._using_desired_device) and (now - self._last_init_attempt_time >= 5.0):
+                    logger.info("Attempting to re-initialize audio player (desired device: %s)...", self._output_device)
+                    await asyncio.to_thread(self._init_pyaudio, self._output_device)
+
                 target_rate = int(self._sample_rate * self._speed)
-                resampled_pcm = resample_pcm(pcm, target_rate, self._hardware_rate)
+                resampled_pcm = await asyncio.to_thread(resample_pcm, pcm, target_rate, self._hardware_rate)
+                duration_est = len(resampled_pcm) / (self._hardware_rate * self._sample_width * self._channels)
 
                 # Broadcast to network subscribers
-                if self._subscribers:
-                    for q in list(self._subscribers):
-                        try:
-                            # Non-blocking put; if queue is full, drop chunk for this client
-                            q.put_nowait(resampled_pcm)
-                        except asyncio.QueueFull:
-                            pass
+                with self._subscribers_lock:
+                    subscribers_snapshot = list(self._subscribers)
+                
+                for q, loop in subscribers_snapshot:
+                    try:
+                        loop.call_soon_threadsafe(_safe_put, q, resampled_pcm)
+                    except Exception as e:
+                        logger.debug("Failed to broadcast chunk to subscriber: %s", e)
 
                 if self._stream:
                     play_t0 = time.time()
-                    await asyncio.to_thread(self._stream.write, resampled_pcm)
+                    self._write_task = asyncio.create_task(asyncio.to_thread(self._stream.write, resampled_pcm))
+                    try:
+                        await self._write_task
+                    finally:
+                        self._write_task = None
                     play_elapsed = time.time() - play_t0
                     logger.debug("Played %d bytes in %.3fs (priority=%s, type=%s, age=%.1fs, remaining=%d)",
                                  len(pcm), play_elapsed, audio_task.priority.name,
@@ -421,11 +555,9 @@ class AudioPlayer:
                 else:
                     logger.debug("Silent mode: skipped %d bytes (~%.1fs audio)", len(pcm), duration_est)
             except Exception as e:
-                logger.warning("Error writing to audio stream: %s", e)
-
-        if not notify_task.done():
-            notify_task.cancel()
-        logger.info("Audio playback loop stopped")
+                logger.warning("Error writing to audio stream: %s. Releasing audio player...", e)
+                await asyncio.to_thread(self._cleanup_pyaudio_sync)
+                self._using_desired_device = False
 
     @property
     def volume(self) -> float:
@@ -441,13 +573,21 @@ class AudioPlayer:
 
     def subscribe(self, maxsize: int = 100) -> asyncio.Queue[bytes]:
         """Subscribe to the audio stream. Returns an asyncio.Queue of PCM bytes."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
         q = asyncio.Queue(maxsize=maxsize)
-        self._subscribers.add(q)
+        with self._subscribers_lock:
+            self._subscribers.add((q, loop))
         return q
         
     def unsubscribe(self, q: asyncio.Queue[bytes]) -> None:
         """Unsubscribe from the audio stream."""
-        self._subscribers.discard(q)
+        with self._subscribers_lock:
+            to_remove = [item for item in self._subscribers if item[0] is q]
+            for item in to_remove:
+                self._subscribers.discard(item)
 
     def set_speed(self, speed: float) -> None:
         """Update playback speed dynamically."""
@@ -458,11 +598,31 @@ class AudioPlayer:
         logger.info("Changing playback speed from %.2fx to %.2fx", self._speed, speed)
         self._speed = speed
 
+    def set_volume(self, volume: float) -> None:
+        """Update playback volume dynamically."""
+        self._volume = max(0.0, min(1.0, volume))
+        logger.info("Volume set to %.0f%%", self._volume * 100)
+
+    async def clear_queue(self) -> None:
+        """Cancel all pending audio tasks and clear the queue."""
+        if self._lock is None:
+            self.init_async_primitives()
+        async with self._lock:
+            for entry in self._heap:
+                if not entry.audio_task.task.done():
+                    entry.audio_task.task.cancel()
+            self._heap.clear()
+        logger.debug("Audio queue cleared")
+
     async def stop(self) -> None:
         """Stop playback and clean up resources."""
         logger.debug("AudioPlayer.stop: stopping (queue_depth=%d, running=%s)", len(self._heap), self._running)
         self._running = False
-        self._notify.set()  # Unblock the loop
+        if self._notify is not None:
+            self._notify.set()  # Unblock the loop
+
+        if self._lock is None:
+            self.init_async_primitives()
 
         async with self._lock:
             for entry in self._heap:
@@ -470,21 +630,13 @@ class AudioPlayer:
                     entry.audio_task.task.cancel()
             self._heap.clear()
 
-        if self._stream:
+        if self._write_task and not self._write_task.done():
             try:
-                logger.debug("AudioPlayer.stop: closing audio stream")
-                self._stream.stop_stream()
-                self._stream.close()
-                logger.debug("AudioPlayer.stop: audio stream closed")
+                logger.debug("AudioPlayer.stop: awaiting active write task")
+                await self._write_task
+                logger.debug("AudioPlayer.stop: active write task finished")
             except Exception as e:
-                logger.warning("Error closing audio stream: %s", e)
+                logger.warning("Error awaiting write task during stop: %s", e)
 
-        if self._pyaudio:
-            try:
-                logger.debug("AudioPlayer.stop: terminating PyAudio")
-                self._pyaudio.terminate()
-                logger.debug("AudioPlayer.stop: PyAudio terminated")
-            except Exception as e:
-                logger.warning("Error terminating PyAudio: %s", e)
-
+        await asyncio.to_thread(self._cleanup_pyaudio_sync)
         logger.info("Audio player stopped")

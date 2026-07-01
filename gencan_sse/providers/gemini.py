@@ -29,6 +29,7 @@ import os
 import random
 import re
 import time
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -131,6 +132,7 @@ class GeminiTTSProvider:
         self._round_robin_idx = 0
         self._round_robin_gemini_idx = 0
 
+        self._states_lock = threading.Lock()
         self._model_states: dict[str, dict[str, float | int]] = {
             m: {"consecutive_failures": 0, "cooldown_until": 0.0}
             for m in self._models
@@ -249,25 +251,32 @@ class GeminiTTSProvider:
 
         # Truncate if over API limit
         if text_bytes > MAX_TEXT_BYTES:
-            full_text = full_text.encode("utf-8")[:MAX_TEXT_BYTES].decode("utf-8", errors="ignore")
+            encoded = full_text.encode("utf-8")
+            boundary = MAX_TEXT_BYTES
+            while boundary > 0 and (encoded[boundary] & 0xC0) == 0x80:
+                boundary -= 1
+            full_text = encoded[:boundary].decode("utf-8", errors="ignore")
             logger.warning(
-                "Text truncated to %d bytes for TTS API limit", MAX_TEXT_BYTES
+                "Text truncated to %d bytes for TTS API limit", len(encoded[:boundary])
             )
 
         # Enforce self-imposed rate limiting
         if self._min_request_interval > 0:
+            sleep_time = 0.0
             async with self._rate_limit_lock:
                 now = time.time()
-                elapsed = now - self._last_request_time
-                if elapsed < self._min_request_interval:
-                    sleep_time = self._min_request_interval - elapsed
-                    logger.info(
-                        "Rate limiting outbound TTS API call: sleeping for "
-                        "%.2f seconds",
-                        sleep_time,
-                    )
-                    await asyncio.sleep(sleep_time)
-                self._last_request_time = time.time()
+                target_time = max(now, self._last_request_time + self._min_request_interval)
+                if target_time > now:
+                    sleep_time = target_time - now
+                self._last_request_time = target_time
+
+            if sleep_time > 0:
+                logger.info(
+                    "Rate limiting outbound TTS API call: sleeping for "
+                    "%.2f seconds",
+                    sleep_time,
+                )
+                await asyncio.sleep(sleep_time)
 
         # Acquire semaphore to limit concurrent API calls
         logger.debug("synthesize: acquiring semaphore")
@@ -287,22 +296,23 @@ class GeminiTTSProvider:
 
     def is_model_circuit_open(self, model: str) -> bool:
         """Whether the circuit breaker is open for a specific model."""
-        state = self._model_states.get(model)
-        if not state:
-            return False
-        cooldown_until = float(state["cooldown_until"])
-        if cooldown_until <= 0:
-            return False
-        if time.time() >= cooldown_until:
-            # Cooldown expired — reset
-            state["cooldown_until"] = 0.0
-            state["consecutive_failures"] = 0
-            logger.info(
-                "Circuit breaker reset for model %s — resuming TTS calls",
-                model,
-            )
-            return False
-        return True
+        with self._states_lock:
+            state = self._model_states.get(model)
+            if not state:
+                return False
+            cooldown_until = float(state["cooldown_until"])
+            if cooldown_until <= 0:
+                return False
+            if time.time() >= cooldown_until:
+                # Cooldown expired — reset
+                state["cooldown_until"] = 0.0
+                state["consecutive_failures"] = 0
+                logger.info(
+                    "Circuit breaker reset for model %s — resuming TTS calls",
+                    model,
+                )
+                return False
+            return True
 
     @property
     def cooldown_remaining(self) -> float:
@@ -314,11 +324,12 @@ class GeminiTTSProvider:
 
     def model_cooldown_remaining(self, model: str) -> float:
         """Seconds remaining in cooldown for *model*, or ``0``."""
-        state = self._model_states.get(model)
-        if not state or float(state["cooldown_until"]) <= 0:
-            return 0.0
-        remaining = float(state["cooldown_until"]) - time.time()
-        return max(0.0, remaining)
+        with self._states_lock:
+            state = self._model_states.get(model)
+            if not state or float(state["cooldown_until"]) <= 0:
+                return 0.0
+            remaining = float(state["cooldown_until"]) - time.time()
+            return max(0.0, remaining)
 
     def _open_circuit(self, cooldown_seconds: float) -> None:
         """Open the circuit breaker for the primary model (compat helper)."""
@@ -326,16 +337,17 @@ class GeminiTTSProvider:
 
     def _open_model_circuit(self, model: str, cooldown_seconds: float) -> None:
         """Open the circuit breaker for *model* for *cooldown_seconds*."""
-        state = self._model_states.get(model)
-        if state:
-            state["cooldown_until"] = time.time() + cooldown_seconds
-            logger.warning(
-                "Circuit breaker OPEN for model %s — blocking TTS for "
-                "%.0fs (%d consecutive failures)",
-                model,
-                cooldown_seconds,
-                state["consecutive_failures"],
-            )
+        with self._states_lock:
+            state = self._model_states.get(model)
+            if state:
+                state["cooldown_until"] = time.time() + cooldown_seconds
+                logger.warning(
+                    "Circuit breaker OPEN for model %s — blocking TTS for "
+                    "%.0fs (%d consecutive failures)",
+                    model,
+                    cooldown_seconds,
+                    state["consecutive_failures"],
+                )
 
     # -------------------------------------------------- retry-delay parsing
 
@@ -495,7 +507,8 @@ class GeminiTTSProvider:
                 ):
                     for part in response.candidates[0].content.parts:
                         if part.inline_data and part.inline_data.data:
-                            state["consecutive_failures"] = 0
+                            with self._states_lock:
+                                state["consecutive_failures"] = 0
                             audio_bytes = len(part.inline_data.data)
                             duration_est = audio_bytes / (24000 * 2)
                             logger.debug(
@@ -518,22 +531,30 @@ class GeminiTTSProvider:
                 logger.warning(
                     "TTS response contained no audio data for model %s", model
                 )
-                state["consecutive_failures"] += 1
-                if (
-                    int(state["consecutive_failures"])
-                    >= self._circuit_break_threshold
-                ):
+                with self._states_lock:
+                    state["consecutive_failures"] += 1
+                    failures = int(state["consecutive_failures"])
+                if failures >= self._circuit_break_threshold:
                     self._open_model_circuit(model, self._circuit_break_cooldown)
                 return b"", {}
 
             except Exception as exc:
                 error_str = str(exc)
-                is_rate_limit = (
-                    "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
-                )
-                state["consecutive_failures"] = (
-                    int(state["consecutive_failures"]) + 1
-                )
+                is_rate_limit = False
+                if hasattr(exc, "code") and getattr(exc, "code") == 429:
+                    is_rate_limit = True
+                elif hasattr(exc, "status_code") and getattr(exc, "status_code") == 429:
+                    is_rate_limit = True
+                else:
+                    is_rate_limit = (
+                        "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                    )
+                
+                with self._states_lock:
+                    state["consecutive_failures"] = (
+                        int(state["consecutive_failures"]) + 1
+                    )
+                    failures = int(state["consecutive_failures"])
 
                 logger.debug(
                     "Exception on model %s attempt %d/%d — type=%s, "
@@ -543,7 +564,7 @@ class GeminiTTSProvider:
                     self._max_retries,
                     type(exc).__name__,
                     is_rate_limit,
-                    state["consecutive_failures"],
+                    failures,
                     error_str[:200],
                 )
 
@@ -564,10 +585,7 @@ class GeminiTTSProvider:
                     return b"", {}  # Stop retrying this model on 429
 
                 # Check circuit breaker threshold for other errors
-                if (
-                    int(state["consecutive_failures"])
-                    >= self._circuit_break_threshold
-                ):
+                if failures >= self._circuit_break_threshold:
                     self._open_model_circuit(model, self._circuit_break_cooldown)
                     return b"", {}
 

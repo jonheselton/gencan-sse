@@ -912,7 +912,7 @@
                     if (status.usage.by_provider && Object.keys(status.usage.by_provider).length > 0) {
                         pContainer.innerHTML = Object.entries(status.usage.by_provider).map(([prov, stats]) => `
                             <div class="diagnostic-row">
-                                <span>${prov}</span>
+                                <span>${escapeHTML(prov)}</span>
                                 <span class="diagnostic-val">${stats.requests} reqs</span>
                             </div>
                         `).join('');
@@ -923,7 +923,7 @@
                     if (status.usage.by_model && Object.keys(status.usage.by_model).length > 0) {
                         mContainer.innerHTML = Object.entries(status.usage.by_model).map(([mod, stats]) => `
                             <div class="diagnostic-row">
-                                <span style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${mod}</span>
+                                <span style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHTML(mod)}</span>
                                 <span class="diagnostic-val">${stats.requests} reqs</span>
                             </div>
                         `).join('');
@@ -993,28 +993,31 @@
                 const config = voices[etype];
                 const tr = document.createElement("tr");
 
-                const badgeClass = `badge-${etype.toLowerCase()}`;
+                const badgeClass = `badge-${escapeHTML(etype.toLowerCase())}`;
+                const escapedEtype = escapeHTML(etype);
+                const escapedStyle = escapeHTML(config.style || "");
+                const escapedVoice = escapeHTML(config.voice || "");
                 
                 tr.innerHTML = `
-                    <td><span class="event-type-badge ${badgeClass}">${etype}</span></td>
+                    <td><span class="event-type-badge ${badgeClass}">${escapedEtype}</span></td>
                     <td>
-                        <select class="select-input" id="voice-select-${etype}" onchange="updateVoiceRouting('${etype}')">
-                            ${voicesList.map(v => `<option value="${v}" ${v === config.voice ? 'selected' : ''}>${v}</option>`).join('')}
+                        <select class="select-input" id="voice-select-${escapedEtype}" onchange="updateVoiceRouting('${escapedEtype}')">
+                            ${voicesList.map(v => `<option value="${escapeHTML(v)}" ${v === config.voice ? 'selected' : ''}>${escapeHTML(v)}</option>`).join('')}
                         </select>
                     </td>
                     <td>
-                        <input type="text" class="text-input" id="voice-style-${etype}" value="${config.style}" placeholder="None" onchange="updateVoiceRouting('${etype}')">
+                        <input type="text" class="text-input" id="voice-style-${escapedEtype}" value="${escapedStyle}" placeholder="None" onchange="updateVoiceRouting('${escapedEtype}')">
                     </td>
                     <td style="text-align: center;">
                         <label class="switch">
-                            <input type="checkbox" id="voice-toggle-${etype}" ${config.enabled ? 'checked' : ''} onchange="updateVoiceRouting('${etype}')">
+                            <input type="checkbox" id="voice-toggle-${escapedEtype}" ${config.enabled ? 'checked' : ''} onchange="updateVoiceRouting('${escapedEtype}')">
                             <span class="slider"></span>
                         </label>
                     </td>
                     <td>
                         <div class="test-action-cell">
-                            <input type="text" class="text-input" id="test-text-${etype}" placeholder="Test phrase..." value="Testing the ${config.voice} voice config.">
-                            <button class="btn-test" onclick="testVoiceRouting('${etype}')">Speak Test</button>
+                            <input type="text" class="text-input" id="test-text-${escapedEtype}" placeholder="Test phrase..." value="Testing the ${escapedVoice} voice config.">
+                            <button class="btn-test" onclick="testVoiceRouting('${escapedEtype}')">Speak Test</button>
                         </div>
                     </td>
                 `;
@@ -1033,14 +1036,14 @@
 
             const currentHTML = logs.map(log => {
                 const time = new Date(log.timestamp * 1000).toLocaleTimeString();
-                const badgeClass = `badge-${log.event_type.toLowerCase()}`;
+                const badgeClass = `badge-${escapeHTML(log.event_type.toLowerCase())}`;
                 
                 return `
                     <div class="log-entry">
                         <span class="log-timestamp">${time}</span>
                         <div class="log-meta">
-                            <span class="event-type-badge ${badgeClass}">${log.event_type}</span>
-                            <span class="log-voice">${log.voice_name}</span>
+                            <span class="event-type-badge ${badgeClass}">${escapeHTML(log.event_type)}</span>
+                            <span class="log-voice">${escapeHTML(log.voice_name)}</span>
                         </div>
                         <div class="log-content">${escapeHTML(log.text)}</div>
                     </div>
@@ -1172,7 +1175,7 @@
                 // Only rewrite options if not focused, to avoid interrupting selection
                 if (document.activeElement !== select) {
                     select.innerHTML = data.available.map(p => 
-                        `<option value="${p}" ${p === data.current ? 'selected' : ''}>${p}</option>`
+                        `<option value="${escapeHTML(p)}" ${p === data.current ? 'selected' : ''}>${escapeHTML(p)}</option>`
                     ).join("");
                 }
             } catch (err) {

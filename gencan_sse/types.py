@@ -118,17 +118,29 @@ class VoiceMapping:
     priority: int = 2
 
 
+class SpeakStatus(Enum):
+    """Status of a speak request.
+
+    Used by SpeakResult to indicate whether a request was queued,
+    skipped, or failed with an error.
+    """
+
+    QUEUED = "queued"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
 @dataclass
 class SpeakResult:
     """Result returned by ``engine.speak()``.
 
     Attributes:
-        status: One of ``"queued"``, ``"skipped"``, or ``"error"``.
+        status: One of ``SpeakStatus``.
         message: Human-readable detail about the result.
         queue_depth: Number of items in the audio queue after this call.
     """
 
-    status: str  # "queued", "skipped", "error"
+    status: SpeakStatus  # SpeakStatus enum
     message: str = ""
     queue_depth: int = 0
 

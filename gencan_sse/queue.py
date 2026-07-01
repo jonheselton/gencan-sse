@@ -114,7 +114,10 @@ class PlaybackWorker:
         self._target_chunk_size = target_chunk_size
         self._on_metrics = on_metrics_callback
 
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: Optional[asyncio.Queue] = None
+        self._synthesis_semaphore: Optional[asyncio.Semaphore] = None
+        self._pending_submissions: list[QueueMessage] = []
+        self._pending_lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._running = False
@@ -128,7 +131,21 @@ class PlaybackWorker:
     @property
     def queue_depth(self) -> int:
         """Number of messages waiting in the queue."""
-        return self._queue.qsize()
+        with self._pending_lock:
+            pending_count = len(self._pending_submissions)
+        if self._queue is None:
+            return pending_count
+        return self._queue.qsize() + pending_count
+
+    @property
+    def current_provider_name(self) -> str:
+        """Name of the active TTS provider."""
+        return self._tts.name
+
+    @property
+    def current_provider(self) -> TTSProvider:
+        """The active TTS provider instance."""
+        return self._tts
 
     def start(self) -> None:
         """Start the background worker thread."""
@@ -152,7 +169,10 @@ class PlaybackWorker:
 
         logger.info("PlaybackWorker stopping...")
         self._running = False
-        self._queue.put(_SHUTDOWN)
+        with self._pending_lock:
+            self._pending_submissions.clear()
+            if self._loop and self._queue:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, _SHUTDOWN)
 
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5.0)
@@ -170,14 +190,33 @@ class PlaybackWorker:
         Returns:
             Approximate queue depth after submission.
         """
-        self._queue.put(message)
-        depth = self._queue.qsize()
-        logger.debug(
-            "Message submitted: type=%s, queue_depth≈%d",
-            type(message).__name__,
-            depth,
-        )
-        return depth
+        with self._pending_lock:
+            if self._loop is None or self._queue is None:
+                # Loop/Queue is not active yet, queue it in pending
+                if len(self._pending_submissions) >= 100:
+                    raise RuntimeError("Playback queue is full")
+                self._pending_submissions.append(message)
+                depth = len(self._pending_submissions)
+                logger.debug(
+                    "Message submitted to pending list: type=%s, queue_depth≈%d",
+                    type(message).__name__,
+                    depth,
+                )
+                return depth
+
+            # Loop/Queue is active
+            current_qsize = self._queue.qsize()
+            if current_qsize + len(self._pending_submissions) >= 100:
+                raise RuntimeError("Playback queue is full")
+
+            self._loop.call_soon_threadsafe(self._queue.put_nowait, message)
+            depth = current_qsize + len(self._pending_submissions) + 1
+            logger.debug(
+                "Message submitted: type=%s, queue_depth≈%d",
+                type(message).__name__,
+                depth,
+            )
+            return depth
 
     # -----------------------------------------------------------------------
     # Internal: background thread event loop
@@ -192,23 +231,33 @@ class PlaybackWorker:
         except Exception:
             logger.exception("PlaybackWorker loop crashed")
         finally:
+            self._running = False
             self._loop.close()
             self._loop = None
+            self._queue = None
             logger.debug("PlaybackWorker event loop closed")
 
     async def _async_main(self) -> None:
         """Main async loop: start the audio player, then drain the queue."""
+        self._queue = asyncio.Queue(maxsize=100)
+        self._synthesis_semaphore = asyncio.Semaphore(3)
+
+        # Move any pending submissions into the asyncio queue
+        with self._pending_lock:
+            for msg in self._pending_submissions:
+                try:
+                    self._queue.put_nowait(msg)
+                except asyncio.QueueFull:
+                    break
+            self._pending_submissions.clear()
+
         # Start audio playback loop
         self._play_task = asyncio.create_task(self._player.play_loop())
 
         try:
             while self._running:
-                # Get next message (blocking with timeout so we can check _running)
-                try:
-                    msg = await asyncio.to_thread(self._queue.get, timeout=0.5)
-                except Exception:
-                    # queue.Empty or timeout
-                    continue
+                # Direct async queue get, no to_thread needed
+                msg = await self._queue.get()
 
                 if msg is _SHUTDOWN:
                     logger.debug("Received shutdown sentinel")
@@ -246,13 +295,19 @@ class PlaybackWorker:
         chunks = chunk_sentences(msg.text, min_length=self._min_sentence_length, target_chunk_size=self._target_chunk_size)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
-                t0 = time.time()
-                pcm, metadata = await self._tts.synthesize(text, msg.voice, msg.style)
+                async with self._synthesis_semaphore:
+                    t0 = time.time()
+                    pcm, metadata = await self._tts.synthesize(text, msg.voice, msg.style)
                 latency = time.time() - t0
-                if self._on_metrics and metadata:
-                    self._on_metrics(metadata)
-                elif self._on_metrics:
-                    self._on_metrics({"latency_ms": latency * 1000, "audio_bytes": len(pcm) if pcm else 0})
+                if self._on_metrics:
+                    metric_data = {
+                        "latency_ms": latency * 1000,
+                        "audio_bytes": len(pcm) if pcm else 0,
+                        "text_length": len(text),
+                    }
+                    if metadata:
+                        metric_data.update(metadata)
+                    self._on_metrics(metric_data)
 
                 if not pcm:
                     logger.warning("TTS returned empty response for speak request")
@@ -303,13 +358,19 @@ class PlaybackWorker:
         chunks = chunk_sentences(filtered, min_length=self._min_sentence_length, target_chunk_size=self._target_chunk_size)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
-                t0 = time.time()
-                pcm, metadata = await self._tts.synthesize(text, voice_name, style_prefix)
+                async with self._synthesis_semaphore:
+                    t0 = time.time()
+                    pcm, metadata = await self._tts.synthesize(text, voice_name, style_prefix)
                 latency = time.time() - t0
-                if self._on_metrics and metadata:
-                    self._on_metrics(metadata)
-                elif self._on_metrics:
-                    self._on_metrics({"latency_ms": latency * 1000, "audio_bytes": len(pcm) if pcm else 0})
+                if self._on_metrics:
+                    metric_data = {
+                        "latency_ms": latency * 1000,
+                        "audio_bytes": len(pcm) if pcm else 0,
+                        "text_length": len(text),
+                    }
+                    if metadata:
+                        metric_data.update(metadata)
+                    self._on_metrics(metric_data)
 
                 if not pcm:
                     logger.warning("TTS returned empty response for event chunk")
@@ -330,8 +391,8 @@ class PlaybackWorker:
 
         if action == "set_volume":
             volume = float(msg.payload.get("volume", 0.8))
-            self._player._volume = max(0.0, min(1.0, volume))
-            logger.debug("Volume set to %.2f", self._player._volume)
+            self._player.set_volume(volume)
+            logger.debug("Volume set to %.2f", self._player.volume)
 
         elif action == "set_speed":
             speed = float(msg.payload.get("speed", 1.0))
@@ -361,13 +422,11 @@ class PlaybackWorker:
                 except ValueError:
                     pass
             else:
-                async with self._player._lock:
-                    self._player._heap.clear()
+                await self._player.clear_queue()
             logger.debug("Queue flushed (event_type=%s)", event_type_str or "all")
 
         elif action == "stop":
-            async with self._player._lock:
-                self._player._heap.clear()
+            await self._player.clear_queue()
             logger.debug("Queue cleared via stop control")
 
         elif action == "set_provider":

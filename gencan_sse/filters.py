@@ -74,6 +74,7 @@ class TextFilter:
         """
         self._recent: deque[str] = deque(maxlen=dedupe_size)
         self._in_code_block = False
+        self._consecutive_skips = 0
 
     def filter(self, text: str) -> Optional[str]:
         """Apply all filtering rules to the input text.
@@ -95,6 +96,17 @@ class TextFilter:
         Returns:
             Filtered text ready for TTS, or None if the text should be skipped.
         """
+        result = self._filter_impl(text)
+        if result is None:
+            self._consecutive_skips += 1
+            if self._consecutive_skips >= 30:
+                logger.info("Auto-resetting filter state after 30 consecutive empty/skipped outputs.")
+                self.reset()
+        else:
+            self._consecutive_skips = 0
+        return result
+
+    def _filter_impl(self, text: Optional[str]) -> Optional[str]:
         # Rule 1: Skip empty/whitespace
         if text is None or not text.strip():
             return None
@@ -106,18 +118,21 @@ class TextFilter:
             logger.debug("Skipping horizontal rule: %s", text)
             return None
 
-        # Rule 3: Code fence tracking
-        fence_count = len(_CODE_FENCE.findall(text))
-        if fence_count > 0:
-            # Toggle code block state for each fence
-            for _ in range(fence_count):
+        lines = text.splitlines()
+        kept_lines = []
+        for line in lines:
+            if line.strip().startswith('```'):
                 self._in_code_block = not self._in_code_block
-            logger.debug("Code fence detected, in_code_block=%s", self._in_code_block)
-            return None
+                self._consecutive_skips = -1
+                logger.debug("Code fence detected, in_code_block=%s", self._in_code_block)
+                continue
+            if self._in_code_block:
+                continue
+            kept_lines.append(line)
 
-        # Rule 4: Inside code block — skip everything
-        if self._in_code_block:
+        if not kept_lines:
             return None
+        text = "\n".join(kept_lines)
 
         # Rule 5: Entirely inline code
         if _INLINE_CODE.match(text):
@@ -153,3 +168,4 @@ class TextFilter:
         """Reset the filter state (code block tracking and dedupe cache)."""
         self._in_code_block = False
         self._recent.clear()
+        self._consecutive_skips = 0

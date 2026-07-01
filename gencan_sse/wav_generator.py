@@ -25,6 +25,9 @@ def wrap_pcm_to_wav(
         The complete WAV file content as bytes, consisting of a 44-byte header
         followed by the original PCM data.
     """
+    if sample_rate <= 0 or sample_width <= 0 or channels <= 0:
+        raise ValueError("sample_rate, sample_width, and channels must be greater than zero")
+
     bits_per_sample = sample_width * 8
     block_align = channels * sample_width
     byte_rate = sample_rate * block_align

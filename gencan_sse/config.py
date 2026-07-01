@@ -14,6 +14,8 @@ strictly for the standalone TTS engine.
 """
 
 import logging
+import copy
+import typing
 from dataclasses import dataclass, field, fields
 from typing import Optional
 
@@ -129,11 +131,11 @@ class EngineConfig:
     channels: int = 1  # mono
     volume: float = 0.8
     speed: float = 1.0
-    output_device: Optional[str] = "SABRE"
+    output_device: Optional[str] = None
 
     # -- Voice routing -------------------------------------------------------
     voices: dict[str, VoiceMapping] = field(
-        default_factory=lambda: dict(_DEFAULT_VOICES)
+        default_factory=lambda: copy.deepcopy(_DEFAULT_VOICES)
     )
     default_voice: str = "Kore"
 
@@ -176,51 +178,110 @@ class EngineConfig:
             A fully-populated :class:`EngineConfig`.
         """
         # --- Parse voice overrides ------------------------------------------
-        voices: dict[str, VoiceMapping] = dict(_DEFAULT_VOICES)
+        voices: dict[str, VoiceMapping] = copy.deepcopy(_DEFAULT_VOICES)
         if "voices" in data:
-            for name, vdata in data["voices"].items():
-                if isinstance(vdata, dict):
-                    default = _DEFAULT_VOICES.get(name)
-                    voices[name] = VoiceMapping(
-                        voice_name=vdata.get(
-                            "voice_name",
-                            default.voice_name if default else "Kore",
-                        ),
-                        style_prefix=vdata.get(
-                            "style_prefix",
-                            default.style_prefix if default else "",
-                        ),
-                        enabled=vdata.get(
-                            "enabled",
-                            default.enabled if default else True,
-                        ),
-                        priority=vdata.get(
-                            "priority",
-                            default.priority if default else 2,
-                        ),
-                    )
+            if isinstance(data["voices"], dict):
+                for name, vdata in data["voices"].items():
+                    if isinstance(vdata, dict):
+                        default = _DEFAULT_VOICES.get(name)
+                        voices[name] = VoiceMapping(
+                            voice_name=vdata.get(
+                                "voice_name",
+                                default.voice_name if default else "Kore",
+                            ),
+                            style_prefix=vdata.get(
+                                "style_prefix",
+                                default.style_prefix if default else "",
+                            ),
+                            enabled=bool(vdata.get(
+                                "enabled",
+                                default.enabled if default else True,
+                            )),
+                            priority=int(vdata.get(
+                                "priority",
+                                default.priority if default else 2,
+                            )),
+                        )
+            else:
+                logger.warning("'voices' section in config must be a dictionary, ignoring.")
 
         # --- Flatten nested sections ----------------------------------------
         flat: dict[str, object] = {}
+        known_sections = ("tts", "audio", "queue", "filtering")
         for key, value in data.items():
             if key == "voices":
                 continue
-            if isinstance(value, dict):
+            if isinstance(value, dict) and key in known_sections:
                 for subkey, subvalue in value.items():
                     # Prefix sub-keys for known namespaced sections
                     flat_key = (
-                        f"{key}_{subkey}" if key in ("tts",) else subkey
+                        f"{key}_{subkey}" if key == "tts" else subkey
                     )
                     flat[flat_key] = subvalue
             else:
                 flat[key] = value
 
-        # --- Map to dataclass fields ----------------------------------------
-        field_names = {f.name for f in fields(cls)}
+        # --- Map to dataclass fields and apply coercion/validation ---------
+        field_types = {f.name: f.type for f in fields(cls)}
         kwargs: dict[str, object] = {"voices": voices}
         for key, value in flat.items():
-            if key in field_names:
-                kwargs[key] = value
+            if key in field_types:
+                expected_type = field_types[key]
+                origin = typing.get_origin(expected_type) or expected_type
+                is_optional = False
+                if origin is typing.Union:
+                    is_optional = type(None) in typing.get_args(expected_type)
+                
+                if value is None:
+                    if is_optional:
+                        kwargs[key] = None
+                        continue
+                    else:
+                        logger.warning("Key '%s' cannot be None. Falling back to default.", key)
+                        continue
+
+                # Get core target type
+                if origin is typing.Union:
+                    union_args = typing.get_args(expected_type)
+                    actual_types = [t for t in union_args if t is not type(None)]
+                    if actual_types:
+                        target_type = actual_types[0]
+                        target_origin = typing.get_origin(target_type) or target_type
+                    else:
+                        target_type = str
+                        target_origin = str
+                else:
+                    target_type = expected_type
+                    target_origin = origin
+
+                # Core Coercion
+                if target_origin is list:
+                    if isinstance(value, list):
+                        kwargs[key] = value
+                    else:
+                        logger.warning("Type mismatch for key '%s': expected list, got %s. Falling back to default.", key, type(value).__name__)
+                elif target_origin is bool:
+                    if isinstance(value, str):
+                        kwargs[key] = value.lower() in ("true", "1", "yes")
+                    else:
+                        kwargs[key] = bool(value)
+                elif target_origin is int:
+                    try:
+                        kwargs[key] = int(value)
+                    except (ValueError, TypeError):
+                        logger.warning("Type mismatch for key '%s': expected int, got %s. Falling back to default.", key, type(value).__name__)
+                elif target_origin is float:
+                    try:
+                        kwargs[key] = float(value)
+                    except (ValueError, TypeError):
+                        logger.warning("Type mismatch for key '%s': expected float, got %s. Falling back to default.", key, type(value).__name__)
+                elif target_origin is str:
+                    kwargs[key] = str(value)
+                else:
+                    if isinstance(value, target_origin):
+                        kwargs[key] = value
+                    else:
+                        logger.warning("Type mismatch for key '%s': expected %s, got %s. Falling back to default.", key, target_origin.__name__, type(value).__name__)
             else:
                 logger.debug("Ignoring unknown config key: %s", key)
 

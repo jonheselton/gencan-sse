@@ -4,15 +4,52 @@ import asyncio
 import logging
 import os
 import time
+import json
+import signal
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel
 from gencan_sse.engine import SpeechEngine
 from gencan_sse.types import Priority, EventType
 from gencan_sse.server.models import SpeakRequest, EventRequest, ControlRequest, StatusResponse
+
+# Expose public properties on AudioPlayer and SpeechEngine
+from gencan_sse.audio_player import AudioPlayer
+
+@property
+def ap_hardware_rate(self) -> int:
+    return self._hardware_rate
+
+@property
+def ap_sample_width(self) -> int:
+    return self._sample_width
+
+@property
+def ap_channels(self) -> int:
+    return self._channels
+
+AudioPlayer.hardware_rate = ap_hardware_rate
+AudioPlayer.sample_width = ap_sample_width
+AudioPlayer.channels = ap_channels
+
+
+@property
+def se_hardware_rate(self) -> int:
+    return self._player.hardware_rate
+
+@property
+def se_sample_width(self) -> int:
+    return self._player.sample_width
+
+@property
+def se_channels(self) -> int:
+    return self._player.channels
+
+SpeechEngine.hardware_rate = se_hardware_rate
+SpeechEngine.sample_width = se_sample_width
+SpeechEngine.channels = se_channels
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +59,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage the lifecycle of the SpeechEngine."""
     logger.info("Starting SpeechEngine daemon...")
     
-    # We will let SpeechEngine default to GeminiTTSProvider
-    # which has our local-tts fallback logic.
+    # Initialize genai.Client and store in app.state
+    from google import genai
+    api_key = os.environ.get("AI_STUDIO_KEY") or os.environ.get("GEMINI_API_KEY")
+    if api_key:
+        app.state.genai_client = genai.Client(api_key=api_key)
+    else:
+        app.state.genai_client = None
+        logger.warning("Gemini API key not configured in environment.")
+        
     engine = SpeechEngine(tts_provider=None)
     engine.start()
     app.state.engine = engine
@@ -44,6 +88,13 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+@app.exception_handler(json.JSONDecodeError)
+async def json_decode_error_handler(request: Request, exc: json.JSONDecodeError):
+    return JSONResponse(
+        status_code=400,
+        content={"status": "error", "message": "Invalid JSON payload", "detail": str(exc)},
+    )
 
 # -------------------------------------------------------------------------
 # Dashboard UI
@@ -72,79 +123,8 @@ async def serve_dashboard():
 
 
 # -------------------------------------------------------------------------
-# REST API — Speak, Events, Chat & Stream
+# REST API — Speak, Events, Control
 # -------------------------------------------------------------------------
-
-class ChatRequest(BaseModel):
-    text: str
-    
-@app.post("/chat", summary="Interactive chat endpoint")
-async def chat(request: ChatRequest, req: Request):
-    """Sends text to Gemini AI, streams output to TTS engine, and returns full text."""
-    from google import genai
-    from google.genai import types
-    import json
-    
-    api_key = os.environ.get("AI_STUDIO_KEY") or os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="Gemini API key not configured")
-        
-    client = genai.Client(api_key=api_key)
-    engine = get_engine(req)
-    
-    # Send thinking event to audio queue
-    engine.speak_event(json.dumps({"type": "thinking", "content": "Thinking..."}), client_ip=req.client.host if req.client else None)
-    
-    try:
-        # Use gemini-2.5-flash as default for fast chat
-        response = await asyncio.to_thread(
-            client.models.generate_content,
-            model='gemini-2.5-flash',
-            contents=request.text,
-        )
-        full_text = response.text
-        
-        # Send message event to TTS engine
-        engine.speak_event(json.dumps({"type": "message", "content": full_text}), client_ip=req.client.host if req.client else None)
-        
-        return {"status": "ok", "response": full_text}
-    except Exception as e:
-        logger.error("Error in chat endpoint: %s", e)
-        engine.speak_event(json.dumps({"type": "error", "message": f"Chat error: {e}"}))
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.websocket("/stream")
-async def stream_audio(websocket: WebSocket):
-    """WebSocket endpoint to stream audio directly to clients as WAV chunks."""
-    from gencan_sse.wav_generator import wrap_pcm_to_wav
-    await websocket.accept()
-    engine = get_engine(websocket)
-    audio_player = engine._player
-    
-    q = audio_player.subscribe(maxsize=100)
-    logger.info("WebSocket audio subscriber connected")
-    
-    # We will use the resampled rate that AudioPlayer is outputting
-    hardware_rate = audio_player._hardware_rate
-    
-    try:
-        while True:
-            chunk = await q.get()
-            # Wrap the PCM chunk in a WAV header so clients can easily play it
-            wav_chunk = wrap_pcm_to_wav(
-                chunk,
-                sample_rate=hardware_rate,
-                sample_width=audio_player._sample_width,
-                channels=audio_player._channels
-            )
-            await websocket.send_bytes(wav_chunk)
-    except WebSocketDisconnect:
-        logger.info("WebSocket audio subscriber disconnected")
-    except Exception as e:
-        logger.warning("WebSocket streaming error: %s", e)
-    finally:
-        audio_player.unsubscribe(q)
 
 
 
@@ -152,6 +132,7 @@ async def stream_audio(websocket: WebSocket):
 async def speak(request: SpeakRequest, req: Request):
     """Synthesize and speak raw text. Returns the queue depth."""
     engine = get_engine(req)
+    engine._text_filter.reset()
     try:
         priority = Priority(request.priority)
     except ValueError:
@@ -177,7 +158,7 @@ async def speak(request: SpeakRequest, req: Request):
 async def process_event(request: EventRequest, req: Request):
     """Process a structured event (e.g. from an LLM stream) for filtering, classification, and speech."""
     engine = get_engine(req)
-    import json
+    engine._text_filter.reset()
     client_ip = req.client.host if req.client else None
     result = engine.speak_event(json.dumps(request.event), client_ip=client_ip)
     return {"status": result.status, "queue_depth": result.queue_depth}
@@ -188,16 +169,36 @@ async def control(request: ControlRequest, req: Request):
     """Send control actions to the engine (e.g., stop, flush, set_volume, set_speed)."""
     engine = get_engine(req)
     action = request.action
+    payload = request.payload or {}
+    
     if action == "stop":
         engine.stop_audio()
     elif action == "flush":
-        engine.flush_queue(request.payload.get("event_type", ""))
+        engine.flush_queue(payload.get("event_type", ""))
     elif action == "set_volume":
-        engine.set_volume(float(request.payload.get("volume", 0.8)))
+        try:
+            vol_val = payload.get("volume", 0.8)
+            if vol_val is None:
+                raise ValueError("Volume cannot be None")
+            vol = float(vol_val)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid volume value: {e}")
+        engine.set_volume(vol)
     elif action == "set_speed":
-        engine.set_speed(float(request.payload.get("speed", 1.0)))
+        try:
+            spd_val = payload.get("speed", 1.0)
+            if spd_val is None:
+                raise ValueError("Speed cannot be None")
+            spd = float(spd_val)
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid speed value: {e}")
+        engine.set_speed(spd)
     elif action == "set_voice":
-        engine.set_voice(request.payload.get("event_type", ""), request.payload.get("voice_name", ""))
+        event_type = payload.get("event_type", "")
+        voice_name = payload.get("voice_name", "")
+        if not event_type or not voice_name:
+            raise HTTPException(status_code=400, detail="event_type and voice_name are required for set_voice")
+        engine.set_voice(event_type, voice_name)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown control action: {action}")
 
@@ -296,6 +297,7 @@ async def api_logs(req: Request):
 async def api_speak(req: Request):
     """Speak text from the dashboard sandbox."""
     engine = get_engine(req)
+    engine._text_filter.reset()
     data = await req.json()
     text = data.get("text", "")
     voice = data.get("voice", "Kore")
@@ -372,7 +374,7 @@ async def api_service_restart(req: Request):
 
     async def do_exit():
         await asyncio.sleep(0.5)
-        os._exit(0)
+        os.kill(os.getpid(), signal.SIGTERM)
 
     asyncio.create_task(do_exit())
     return JSONResponse({"status": "success", "message": "Service is restarting..."})
@@ -385,15 +387,19 @@ async def api_service_stop(req: Request):
 
     async def do_stop():
         await asyncio.sleep(0.5)
-        import subprocess
         is_dev = os.environ.get("GENCAN_DEV") == "true"
         plist_name = "com.gencan.sse.dev.plist" if is_dev else "com.gencan.sse.plist"
         plist_path = os.path.expanduser(f"~/Library/LaunchAgents/{plist_name}")
+        
+        import subprocess
+        def run_bootout():
+            return subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", plist_path], capture_output=True)
+            
         try:
-            subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}", plist_path])
-        except Exception:
-            # Fallback: just exit the process
-            os._exit(0)
+            await asyncio.wait_for(asyncio.to_thread(run_bootout), timeout=5.0)
+        except Exception as e:
+            logger.warning("launchctl stop failed or timed out: %s. Falling back to SIGTERM.", e)
+            os.kill(os.getpid(), signal.SIGTERM)
 
     asyncio.create_task(do_stop())
     return JSONResponse({"status": "success", "message": "Service is stopping and unloading..."})

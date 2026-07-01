@@ -16,6 +16,8 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
 import datetime
 import logging
 import time
@@ -106,11 +108,11 @@ class SpeechEngine:
             import sys
             
             # Prefer Kokoro on macOS if installed (Disabled to fall back to Gemini)
-            # if sys.platform == "darwin":
-            #     from gencan_sse.providers.kokoro import KokoroTTSProvider
-            #     provider = KokoroTTSProvider()
-            #     if provider.is_available:
-            #         self._tts_provider = provider
+            if sys.platform == "darwin":
+                from gencan_sse.providers.kokoro import KokoroTTSProvider
+                provider = KokoroTTSProvider()
+                if provider.is_available:
+                    self._tts_provider = provider
 
             
             if not hasattr(self, "_tts_provider"):
@@ -163,8 +165,8 @@ class SpeechEngine:
             "total_requests": 0,
             "failed_requests": 0,
             "estimated_cost_usd": 0.0,
-            "by_model": {},
-            "by_provider": {},
+            "by_model": defaultdict(lambda: {"requests": 0, "audio_bytes": 0, "total_latency_ms": 0.0}),
+            "by_provider": defaultdict(lambda: {"requests": 0, "audio_bytes": 0}),
             "chunk_metrics": {"total_latency_ms": 0.0, "total_audio_bytes": 0, "total_chunks": 0},
         }
 
@@ -266,7 +268,7 @@ class SpeechEngine:
         depth = self._worker.submit(msg)
 
         self._record_activity(event_type.name, voice, text)
-        self._record_usage(len(text), True)
+        self._record_usage(0, True)
 
         return SpeakResult(
             status="queued",
@@ -297,7 +299,7 @@ class SpeechEngine:
         depth = self._worker.submit(msg)
 
         self._record_activity('EVENT', 'auto', event_json)
-        self._record_usage(len(event_json), True)
+        self._record_usage(0, True)
 
         return SpeakResult(
             status="queued",
@@ -402,7 +404,6 @@ class SpeechEngine:
             provider = AVFoundationTTSProvider()
 
         if provider:
-            self._tts_provider = provider
             self._worker.submit(ControlMessage(action="set_provider", payload={"provider": provider}))
             logger.info("Engine TTS provider switched to %s", provider.name)
             return True
@@ -424,8 +425,8 @@ class SpeechEngine:
             volume=self._player.volume,
             speed=self._player.speed,
             uptime_seconds=time.time() - self._start_time if self._start_time else 0.0,
-            tts_provider=self._tts_provider.name,
-            tts_available=self._tts_provider.is_available,
+            tts_provider=self._worker.current_provider_name,
+            tts_available=self._worker.current_provider.is_available,
             voices={
                 etype.name: name
                 for etype, (name, _, _) in self._voice_map.items()
@@ -481,20 +482,15 @@ class SpeechEngine:
         provider = metadata.get("provider", "unknown")
         latency_ms = metadata.get("latency_ms", 0.0)
         audio_bytes = metadata.get("audio_bytes", 0)
+        text_length = metadata.get("text_length", 0)
 
         # Update per-model stats
-        if model not in self._usage_stats["by_model"]:
-            self._usage_stats["by_model"][model] = {"requests": 0, "audio_bytes": 0, "total_latency_ms": 0.0}
-        
         m_stat = self._usage_stats["by_model"][model]
         m_stat["requests"] += 1
         m_stat["audio_bytes"] += audio_bytes
         m_stat["total_latency_ms"] += latency_ms
 
         # Update per-provider stats
-        if provider not in self._usage_stats["by_provider"]:
-            self._usage_stats["by_provider"][provider] = {"requests": 0, "audio_bytes": 0}
-        
         p_stat = self._usage_stats["by_provider"][provider]
         p_stat["requests"] += 1
         p_stat["audio_bytes"] += audio_bytes
@@ -504,6 +500,12 @@ class SpeechEngine:
         cm["total_latency_ms"] += latency_ms
         cm["total_audio_bytes"] += audio_bytes
         cm["total_chunks"] += 1
+
+        # Update billing metrics
+        self._usage_stats["total_characters"] += text_length
+        self._usage_stats["estimated_cost_usd"] = (
+            self._usage_stats["total_characters"] * 15.0 / 1_000_000
+        )
 
     # ------------------------------------------------------------------
     # Drain
@@ -522,6 +524,12 @@ class SpeechEngine:
             ``True`` if the queue drained within the timeout,
             ``False`` if the timeout expired with items still queued.
         """
+        try:
+            asyncio.get_running_loop()
+            logger.warning("Blocking drain() called from within a running event loop. Use async_drain() instead.")
+        except RuntimeError:
+            pass
+
         if not self._is_running:
             return True
         deadline = time.time() + timeout
@@ -529,6 +537,25 @@ class SpeechEngine:
             if self._player.queue_depth == 0:
                 return True
             time.sleep(0.1)
+        return False
+
+    async def async_drain(self, timeout: float = 30.0) -> bool:
+        """Non-blocking await until the audio queue is empty or *timeout* expires.
+
+        Args:
+            timeout: Maximum seconds to wait. Defaults to 30.
+
+        Returns:
+            ``True`` if the queue drained within the timeout,
+            ``False`` if the timeout expired with items still queued.
+        """
+        if not self._is_running:
+            return True
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if self._player.queue_depth == 0:
+                return True
+            await asyncio.sleep(0.1)
         return False
 
     # ------------------------------------------------------------------

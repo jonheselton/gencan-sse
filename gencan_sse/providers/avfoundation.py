@@ -26,6 +26,13 @@ import time
 
 logger = logging.getLogger(__name__)
 
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ImportError:
+    HAS_NUMPY = False
+
+
 # ---------------------------------------------------------------------------
 # Default voice configuration
 # ---------------------------------------------------------------------------
@@ -154,9 +161,10 @@ def synthesize_and_write(text: str, voice_id: str, speaking_rate: float):
             break
 
 if __name__ == '__main__':
+    import os
     text = sys.stdin.read()
     if text.strip():
-        voice_id = sys.argv[1] if len(sys.argv) > 1 else "{default_voice_id}"
+        voice_id = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("DEFAULT_VOICE_ID", "com.apple.voice.premium.en-US.Zoe")
         rate = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
         synthesize_and_write(text, voice_id, rate)
 """
@@ -306,16 +314,35 @@ class AVFoundationTTSProvider:
 
     async def _synthesize_subprocess(self, text: str, voice_name: str) -> bytes:
         """Run AVFoundation synthesis in a subprocess and parse the output."""
-        script = _SUBPROCESS_SCRIPT.replace("{default_voice_id}", self._default_voice_id)
+        script = _SUBPROCESS_SCRIPT
+        
+        import os
+        env = os.environ.copy()
+        env["DEFAULT_VOICE_ID"] = self._default_voice_id
         
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-c", script, voice_name, str(self._speaking_rate),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         
-        stdout_data, stderr_data = await proc.communicate(input=text.encode("utf-8"))
+        try:
+            stdout_data, stderr_data = await asyncio.wait_for(
+                proc.communicate(input=text.encode("utf-8")),
+                timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            logger.error("AVFoundation subprocess timed out after 15.0 seconds")
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                logger.error("Error killing AVFoundation subprocess: %s", e)
+            await proc.wait()
+            return b""
         
         if proc.returncode != 0:
             logger.error("AVFoundation subprocess failed with code %s: %s", 
@@ -325,50 +352,109 @@ class AVFoundationTTSProvider:
         if not stdout_data:
             return b""
             
-        # Parse the custom binary protocol written by the subprocess
-        # Format: [byte(format_id), uint32(sample_rate), uint32(frames), bytes(data)] * chunks
-        offset = 0
-        float_samples: list[float] = []
-        source_rate = 22050
-        
-        while offset < len(stdout_data):
-            if offset + 9 > len(stdout_data):
-                break
-                
-            fmt_id = stdout_data[offset]
-            offset += 1
-            source_rate = struct.unpack_from("<I", stdout_data, offset)[0]
-            offset += 4
-            frames = struct.unpack_from("<I", stdout_data, offset)[0]
-            offset += 4
+        if HAS_NUMPY:
+            # Parse the custom binary protocol written by the subprocess using numpy
+            offset = 0
+            float_samples_list = []
+            source_rate = 22050
             
-            chunk_bytes = frames * fmt_id
-            if offset + chunk_bytes > len(stdout_data):
-                break
+            while offset < len(stdout_data):
+                if offset + 9 > len(stdout_data):
+                    break
+                    
+                fmt_id = stdout_data[offset]
+                offset += 1
+                source_rate = struct.unpack_from("<I", stdout_data, offset)[0]
+                offset += 4
+                frames = struct.unpack_from("<I", stdout_data, offset)[0]
+                offset += 4
                 
-            chunk_data = stdout_data[offset:offset+chunk_bytes]
-            offset += chunk_bytes
+                # Bounds checks on fmt_id and source_rate
+                if fmt_id not in (2, 4):
+                    logger.error("Invalid format identifier: %s", fmt_id)
+                    return b""
+                if not (8000 <= source_rate <= 96000):
+                    logger.error("Invalid source sample rate: %s", source_rate)
+                    return b""
+                    
+                chunk_bytes = frames * fmt_id
+                if offset + chunk_bytes > len(stdout_data):
+                    break
+                    
+                chunk_data = stdout_data[offset:offset+chunk_bytes]
+                offset += chunk_bytes
+                
+                if fmt_id == 4:
+                    samples = np.frombuffer(chunk_data, dtype=np.float32)
+                    float_samples_list.append(samples)
+                elif fmt_id == 2:
+                    samples = np.frombuffer(chunk_data, dtype=np.int16).astype(np.float32) / 32768.0
+                    float_samples_list.append(samples)
+                    
+            if not float_samples_list:
+                return b""
+            float_samples = np.concatenate(float_samples_list)
             
-            if fmt_id == 4:
-                # float32
-                samples = struct.unpack(f"<{frames}f", chunk_data)
-                float_samples.extend(samples)
-            elif fmt_id == 2:
-                # int16
-                samples = struct.unpack(f"<{frames}h", chunk_data)
-                float_samples.extend(s / 32768.0 for s in samples)
+            # Resample from source rate to target rate
+            if source_rate != self._target_sample_rate:
+                ratio = self._target_sample_rate / source_rate
+                src_len = len(float_samples)
+                dst_len = int(src_len * ratio)
+                if dst_len > 0:
+                    x_new = np.linspace(0, src_len - 1, dst_len)
+                    xp = np.arange(src_len)
+                    float_samples = np.interp(x_new, xp, float_samples)
+                else:
+                    float_samples = np.array([], dtype=np.float32)
+                    
+            # Convert float32 → 16-bit signed PCM
+            clamped = np.clip(float_samples, -1.0, 1.0)
+            i16_samples = (clamped * 32767).astype(np.int16)
+            return i16_samples.tobytes()
+        else:
+            # Fallback when numpy is not available
+            offset = 0
+            float_samples = []
+            source_rate = 22050
+            
+            while offset < len(stdout_data):
+                if offset + 9 > len(stdout_data):
+                    break
+                    
+                fmt_id = stdout_data[offset]
+                offset += 1
+                source_rate = struct.unpack_from("<I", stdout_data, offset)[0]
+                offset += 4
+                frames = struct.unpack_from("<I", stdout_data, offset)[0]
+                offset += 4
                 
-        if not float_samples:
-            return b""
-
-        # Resample from source rate to target rate
-        resampled = _resample_linear(float_samples, source_rate, self._target_sample_rate)
-
-        # Convert float32 → 16-bit signed PCM
-        pcm_data = bytearray()
-        for sample in resampled:
-            clamped = max(-1.0, min(1.0, sample))
-            i16 = int(clamped * 32767)
-            pcm_data.extend(struct.pack("<h", i16))
-
-        return bytes(pcm_data)
+                # Bounds checks on fmt_id and source_rate
+                if fmt_id not in (2, 4):
+                    logger.error("Invalid format identifier: %s", fmt_id)
+                    return b""
+                if not (8000 <= source_rate <= 96000):
+                    logger.error("Invalid source sample rate: %s", source_rate)
+                    return b""
+                    
+                chunk_bytes = frames * fmt_id
+                if offset + chunk_bytes > len(stdout_data):
+                    break
+                    
+                chunk_data = stdout_data[offset:offset+chunk_bytes]
+                offset += chunk_bytes
+                
+                if fmt_id == 4:
+                    samples = struct.unpack(f"<{frames}f", chunk_data)
+                    float_samples.extend(samples)
+                elif fmt_id == 2:
+                    samples = struct.unpack(f"<{frames}h", chunk_data)
+                    float_samples.extend(s / 32768.0 for s in samples)
+                    
+            if not float_samples:
+                return b""
+                
+            resampled = _resample_linear(float_samples, source_rate, self._target_sample_rate)
+            
+            import array
+            clamped_i16 = [int(max(-1.0, min(1.0, s)) * 32767) for s in resampled]
+            return array.array('h', clamped_i16).tobytes()
