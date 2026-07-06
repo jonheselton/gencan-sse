@@ -603,6 +603,86 @@
                 transform: translateY(0);
             }
         }
+
+        .logs-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        @media (max-width: 1024px) {
+            .logs-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .log-entry-system {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.015);
+            border: 1px solid var(--border-color);
+            font-size: 0.82rem;
+            animation: fadeIn 0.2s ease-out;
+            line-height: 1.4;
+            text-align: left;
+        }
+        
+        .log-entry-system.level-error {
+            border-left: 3px solid var(--accent-rose);
+            background: rgba(244, 63, 94, 0.03);
+        }
+        
+        .log-entry-system.level-warning {
+            border-left: 3px solid var(--accent-amber);
+            background: rgba(245, 158, 11, 0.03);
+        }
+        
+        .log-entry-system.level-info {
+            border-left: 3px solid var(--accent-emerald);
+            background: rgba(16, 185, 129, 0.03);
+        }
+        
+        .log-entry-system.level-debug {
+            border-left: 3px solid var(--accent-cyan);
+            background: rgba(6, 182, 212, 0.03);
+        }
+        
+        .system-log-meta {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            font-size: 0.75rem;
+            margin-bottom: 2px;
+        }
+        
+        .system-log-time {
+            color: var(--color-text-muted);
+        }
+        
+        .system-log-level {
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .level-error .system-log-level { color: var(--accent-rose); }
+        .level-warning .system-log-level { color: var(--accent-amber); }
+        .level-info .system-log-level { color: var(--accent-emerald); }
+        .level-debug .system-log-level { color: var(--accent-cyan); }
+        
+        .system-log-logger {
+            color: var(--accent-indigo);
+            font-weight: 500;
+        }
+        
+        .system-log-message {
+            color: #e5e7eb;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
     </style>
 </head>
 <body>
@@ -824,14 +904,36 @@
         </table>
     </div>
 
-    <!-- Spoken Activity Feed Card -->
-    <div class="activity-feed-card">
-        <div class="card-title">
-            <span>Live Spoken Activity Feed</span>
-            <span style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: normal;">Updates in real time</span>
+    <div class="logs-grid">
+        <!-- Spoken Activity Feed Card -->
+        <div class="activity-feed-card">
+            <div class="card-title">
+                <span>Live Spoken Activity Feed</span>
+                <span style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: normal;">Updates in real time</span>
+            </div>
+            <div class="activity-logs" id="activityLogs">
+                <div class="log-empty">No speech activity logged yet. Start speaking!</div>
+            </div>
         </div>
-        <div class="activity-logs" id="activityLogs">
-            <div class="log-empty">No speech activity logged yet. Start speaking!</div>
+
+        <!-- Daemon System Logs Card -->
+        <div class="activity-feed-card">
+            <div class="card-title">
+                <span>Daemon System Logs</span>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <select id="logLevelFilter" class="select-input" style="padding: 4px 8px; font-size: 0.8rem; border-radius: 6px; background: rgba(0,0,0,0.3); width: auto;" onchange="filterSystemLogs()">
+                        <option value="ALL">All Levels</option>
+                        <option value="DEBUG">DEBUG</option>
+                        <option value="INFO">INFO</option>
+                        <option value="WARNING">WARNING</option>
+                        <option value="ERROR">ERROR</option>
+                    </select>
+                    <span style="font-size: 0.85rem; color: var(--color-text-muted); font-weight: normal;">System diagnostics</span>
+                </div>
+            </div>
+            <div class="activity-logs" id="systemLogs" style="font-family: 'JetBrains Mono', monospace;">
+                <div class="log-empty">No system logs loaded.</div>
+            </div>
         </div>
     </div>
 
@@ -954,6 +1056,58 @@
             } catch (error) {
                 console.error("Error fetching logs:", error);
             }
+        }
+
+        let systemLogsData = [];
+
+        async function fetchSystemLogs() {
+            try {
+                const response = await fetch(`${API_BASE}/api/system-logs`);
+                if (!response.ok) return;
+                const data = await response.json();
+                systemLogsData = data.logs || [];
+                renderSystemLogs();
+            } catch (error) {
+                console.error("Error fetching system logs:", error);
+            }
+        }
+
+        function filterSystemLogs() {
+            renderSystemLogs();
+        }
+
+        function renderSystemLogs() {
+            const logsContainer = document.getElementById("systemLogs");
+            const levelFilter = document.getElementById("logLevelFilter").value;
+            
+            let filteredLogs = systemLogsData;
+            if (levelFilter !== "ALL") {
+                filteredLogs = systemLogsData.filter(log => log.level === levelFilter);
+            }
+
+            if (!filteredLogs || filteredLogs.length === 0) {
+                logsContainer.innerHTML = `<div class="log-empty">No system logs found matching severity "${levelFilter}".</div>`;
+                return;
+            }
+
+            const currentHTML = filteredLogs.map(log => {
+                const date = new Date(log.timestamp * 1000);
+                const time = date.toLocaleTimeString();
+                const levelClass = `level-${log.level.toLowerCase()}`;
+                
+                return `
+                    <div class="log-entry-system ${levelClass}">
+                        <div class="system-log-meta">
+                            <span class="system-log-time">${time}</span>
+                            <span class="system-log-level">${escapeHTML(log.level)}</span>
+                            <span class="system-log-logger">${escapeHTML(log.logger)}</span>
+                        </div>
+                        <div class="system-log-message">${escapeHTML(log.message)}</div>
+                    </div>
+                `;
+            }).reverse().join(""); // Show newest on top
+            
+            logsContainer.innerHTML = currentHTML;
         }
 
         function updateUptimeText(seconds) {
@@ -1282,9 +1436,11 @@
         fetchStatus();
         fetchProviders();
         fetchLogs();
+        fetchSystemLogs();
         setInterval(fetchStatus, 1500);
         setInterval(fetchProviders, 15000);
         setInterval(fetchLogs, 1500);
+        setInterval(fetchSystemLogs, 1500);
     </script>
 </body>
 </html>

@@ -51,6 +51,45 @@ SpeechEngine.hardware_rate = se_hardware_rate
 SpeechEngine.sample_width = se_sample_width
 SpeechEngine.channels = se_channels
 
+from collections import deque
+import threading
+
+class InMemoryLogHandler(logging.Handler):
+    """Thread-safe logging handler that keeps the last 200 logs in memory."""
+    def __init__(self, limit: int = 200) -> None:
+        super().__init__()
+        self.limit = limit
+        self.logs: deque = deque(maxlen=limit)
+        self.lock = threading.RLock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            # Safely extract and format message without calling self.format
+            # to prevent potential recursive logging hangs.
+            msg = record.getMessage()
+            if record.exc_info:
+                import traceback
+                msg += "\n" + "".join(traceback.format_exception(*record.exc_info))
+            
+            log_entry = {
+                "timestamp": record.created,  # Unix timestamp
+                "level": record.levelname,
+                "logger": record.name,
+                "message": msg,
+            }
+            with self.lock:
+                self.logs.append(log_entry)
+        except Exception:
+            pass  # Avoid handleError to prevent recursive hang under pytest
+
+    def get_logs(self) -> list[dict]:
+        with self.lock:
+            return list(self.logs)
+
+system_log_handler = InMemoryLogHandler()
+logging.getLogger().addHandler(system_log_handler)
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -291,6 +330,12 @@ async def api_logs(req: Request):
     """Returns the activity log for the live feed."""
     engine = get_engine(req)
     return JSONResponse({"logs": engine.get_activity_log()})
+
+
+@app.get("/api/system-logs", summary="Get internal system/daemon logs")
+async def api_system_logs(req: Request):
+    """Returns the internal daemon log messages for the diagnostic feed."""
+    return JSONResponse({"logs": system_log_handler.get_logs()})
 
 
 @app.post("/api/speak", summary="Speak text (dashboard)")

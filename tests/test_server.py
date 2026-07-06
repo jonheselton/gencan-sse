@@ -194,3 +194,21 @@ def test_api_voice(client, mock_engine):
     )
     assert response.status_code == 200
     assert response.json()["status"] == "success"
+
+def test_api_system_logs(client, mock_engine):
+    """GET /api/system-logs should return system log entries."""
+    import logging
+    logger = logging.getLogger("gencan_sse.server.app")
+    logger.error("Test message for in-memory log handler")
+    
+    response = client.get("/api/system-logs")
+    assert response.status_code == 200
+    data = response.json()
+    assert "logs" in data
+    assert len(data["logs"]) > 0
+    found = any("Test message for in-memory log handler" in log["message"] for log in data["logs"])
+    assert found
+
+
+
+
