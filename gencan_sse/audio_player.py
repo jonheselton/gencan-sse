@@ -185,6 +185,9 @@ class AudioPlayer:
         max_queue_depth: int = 5,
         stale_timeout: float = 10.0,
         output_device: Optional[str] = None,
+        idle_timeout: float = 5.0,
+        reconnect_retries: int = 3,
+        reconnect_delay: float = 0.5,
     ):
         """Initialize the audio player.
 
@@ -197,6 +200,9 @@ class AudioPlayer:
             max_queue_depth: Maximum entries in the queue.
             stale_timeout: Seconds before a queued entry is dropped.
             output_device: PyAudio device name (None = system default).
+            idle_timeout: Seconds before an idle player closes audio stream.
+            reconnect_retries: Number of retry attempts to scan for desired device.
+            reconnect_delay: Delay in seconds between reconnect attempts.
         """
         self._sample_rate = sample_rate
         self._sample_width = sample_width
@@ -207,6 +213,9 @@ class AudioPlayer:
         self._stale_timeout = stale_timeout
         self._output_device = output_device
         self._hardware_rate = sample_rate
+        self._idle_timeout = idle_timeout
+        self._reconnect_retries = reconnect_retries
+        self._reconnect_delay = reconnect_delay
 
         # Priority heap + async notification
         self._heap: list[_PriorityEntry] = []
@@ -221,6 +230,7 @@ class AudioPlayer:
         self._write_task: Optional[asyncio.Task] = None
         self._using_desired_device = False
         self._last_init_attempt_time = 0.0
+        self._idle_cleaned_up = False
         
         # Audio stream pub/sub
         self._subscribers: set[tuple[asyncio.Queue[bytes], asyncio.AbstractEventLoop]] = set()
@@ -261,32 +271,54 @@ class AudioPlayer:
             self._pyaudio = None
 
     def _init_pyaudio(self, device_name: Optional[str]) -> None:
-        """Initialize PyAudio with optional device selection."""
+        """Initialize PyAudio with optional device selection and hotplug retry logic."""
         logger.debug("_init_pyaudio: device_name=%r", device_name)
         self._last_init_attempt_time = time.time()
+        self._idle_cleaned_up = False
         self._cleanup_pyaudio_sync()
         try:
             import pyaudio
-            self._pyaudio = pyaudio.PyAudio()
-            logger.debug("_init_pyaudio: PyAudio created, device_count=%d", self._pyaudio.get_device_count())
-
             device_index = None
             if device_name:
-                for i in range(self._pyaudio.get_device_count()):
-                    info = self._pyaudio.get_device_info_by_index(i)
-                    logger.debug("_init_pyaudio: device[%d] = %s (max_out=%s)",
-                                 i, info["name"], info.get("maxOutputChannels", "?"))
-                    if device_name.lower() in info["name"].lower():
-                        device_index = i
-                        logger.info("Using audio device: %s (index %d)", info["name"], i)
+                retries = self._reconnect_retries
+                delay = self._reconnect_delay
+                for attempt in range(retries):
+                    try:
+                        self._pyaudio = pyaudio.PyAudio()
+                        logger.debug("_init_pyaudio (attempt %d): PyAudio created, device_count=%d",
+                                     attempt + 1, self._pyaudio.get_device_count())
+
+                        for i in range(self._pyaudio.get_device_count()):
+                            info = self._pyaudio.get_device_info_by_index(i)
+                            logger.debug("_init_pyaudio: device[%d] = %s (max_out=%s)",
+                                         i, info["name"], info.get("maxOutputChannels", "?"))
+                            if device_name.lower() in info["name"].lower():
+                                device_index = i
+                                logger.info("Using audio device: %s (index %d)", info["name"], i)
+                                break
+                    except Exception as pe:
+                        logger.warning("Error during PyAudio instance creation/scanning on attempt %d: %s", attempt + 1, pe)
+
+                    if device_index is not None:
                         break
+
+                    self._cleanup_pyaudio_sync()
+                    if attempt < retries - 1 and delay > 0:
+                        logger.info("Device '%s' not found. Retrying in %.2fs... (attempt %d/%d)",
+                                    device_name, delay, attempt + 1, retries)
+                        time.sleep(delay)
+
                 if device_index is None:
-                    logger.warning("Device '%s' not found. Using default.", device_name)
+                    logger.warning("Device '%s' not found after %d attempts. Using default.", device_name, retries)
                     self._using_desired_device = False
                 else:
                     self._using_desired_device = True
             else:
+                self._pyaudio = pyaudio.PyAudio()
                 self._using_desired_device = True
+
+            if self._pyaudio is None:
+                self._pyaudio = pyaudio.PyAudio()
 
             if device_index is not None:
                 device_info = self._pyaudio.get_device_info_by_index(device_index)
@@ -428,21 +460,26 @@ class AudioPlayer:
                         current_entry = None
 
             if current_entry is None:
-                # Heap was empty — wait for notification without holding lock
-                notify_task = asyncio.create_task(self._notify.wait())
-                try:
-                    await asyncio.wait_for(notify_task, timeout=0.5)
-                    # Notified
+                # Heap was empty — wait for notification with idle timeout if stream is open
+                if self._stream is not None:
+                    notify_task = asyncio.create_task(self._notify.wait())
+                    try:
+                        await asyncio.wait_for(notify_task, timeout=self._idle_timeout)
+                        self._notify.clear()
+                    except asyncio.TimeoutError:
+                        logger.info("Audio player idle for %.1fs. Releasing audio resources.", self._idle_timeout)
+                        await asyncio.to_thread(self._cleanup_pyaudio_sync)
+                        self._idle_cleaned_up = True
+                    finally:
+                        if not notify_task.done():
+                            notify_task.cancel()
+                            try:
+                                await notify_task
+                            except asyncio.CancelledError:
+                                pass
+                else:
+                    await self._notify.wait()
                     self._notify.clear()
-                except asyncio.TimeoutError:
-                    pass
-                finally:
-                    if not notify_task.done():
-                        notify_task.cancel()
-                        try:
-                            await notify_task
-                        except asyncio.CancelledError:
-                            pass
                 continue
 
             audio_task = current_entry.audio_task
@@ -523,7 +560,7 @@ class AudioPlayer:
             # Play
             try:
                 now = time.time()
-                if (self._stream is None or not self._using_desired_device) and (now - self._last_init_attempt_time >= 5.0):
+                if (self._stream is None or not self._using_desired_device) and (self._idle_cleaned_up or now - self._last_init_attempt_time >= 5.0):
                     logger.info("Attempting to re-initialize audio player (desired device: %s)...", self._output_device)
                     await asyncio.to_thread(self._init_pyaudio, self._output_device)
 

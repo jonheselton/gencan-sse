@@ -21,7 +21,7 @@ async def test_device_not_found_fallback():
         mock_pa.get_device_info_by_index.side_effect = lambda idx: mock_devices[idx]
         mock_pa.get_default_output_device_info.return_value = mock_devices[0]
 
-        player = AudioPlayer(output_device="Sabre DAC")
+        player = AudioPlayer(output_device="Sabre DAC", reconnect_retries=1, reconnect_delay=0.0)
         
         # Should fall back to default because "Sabre DAC" isn't in mock_devices
         assert player._using_desired_device is False
@@ -47,7 +47,7 @@ async def test_reconnect_when_device_becomes_available():
         mock_pa.get_device_info_by_index.side_effect = lambda idx: mock_devices[idx]
         mock_pa.get_default_output_device_info.return_value = mock_devices[0]
 
-        player = AudioPlayer(output_device="Sabre DAC")
+        player = AudioPlayer(output_device="Sabre DAC", reconnect_retries=1, reconnect_delay=0.0)
         player.init_async_primitives()
         assert player._using_desired_device is False
 
@@ -102,7 +102,7 @@ async def test_pyaudio_cleanup_on_write_failure():
         mock_stream.write.side_effect = OSError("Device disconnected")
         mock_pa.open.return_value = mock_stream
 
-        player = AudioPlayer(output_device="Sabre DAC")
+        player = AudioPlayer(output_device="Sabre DAC", reconnect_retries=1, reconnect_delay=0.0)
         player.init_async_primitives()
         assert player._using_desired_device is True
 
@@ -129,3 +129,95 @@ async def test_pyaudio_cleanup_on_write_failure():
             await loop_task
         except Exception:
             pass
+
+
+@pytest.mark.asyncio
+async def test_audio_player_idle_cleanup():
+    """Verify that the player closes the stream and sets the idle cleanup flag when idle."""
+    mock_devices = [
+        {"name": "Sabre DAC", "defaultSampleRate": 48000},
+    ]
+
+    with patch("pyaudio.PyAudio") as mock_pa_cls:
+        mock_pa = MagicMock()
+        mock_pa_cls.return_value = mock_pa
+        mock_pa.get_device_count.return_value = len(mock_devices)
+        mock_pa.get_device_info_by_index.side_effect = lambda idx: mock_devices[idx]
+
+        mock_stream = MagicMock()
+        mock_pa.open.return_value = mock_stream
+
+        # Instantiate with a short idle timeout (0.1 seconds)
+        player = AudioPlayer(
+            output_device="Sabre DAC",
+            idle_timeout=0.1,
+            reconnect_retries=1,
+            reconnect_delay=0.0
+        )
+        player.init_async_primitives()
+        assert player._stream is not None
+        assert player._idle_cleaned_up is False
+
+        # Run play_loop in background
+        loop_task = asyncio.create_task(player.play_loop())
+
+        # Wait for the idle timeout to trigger (should take >0.1 seconds)
+        await asyncio.sleep(0.25)
+
+        # Verify it cleaned up the stream and set the flag
+        assert player._stream is None
+        assert player._pyaudio is None
+        assert player._idle_cleaned_up is True
+        mock_stream.close.assert_called_once()
+
+        await player.stop()
+        try:
+            await loop_task
+        except Exception:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_audio_player_retry_logic():
+    """Verify that PyAudio initialization retries multiple times when the desired device is initially missing."""
+    mock_devices_empty = [
+        {"name": "Built-in Output", "defaultSampleRate": 44100},
+    ]
+    mock_devices_with_dac = [
+        {"name": "Built-in Output", "defaultSampleRate": 44100},
+        {"name": "Sabre DAC", "defaultSampleRate": 48000},
+    ]
+
+    # Keep track of calls to PyAudio constructor/device scanning
+    pyaudio_instantiations = 0
+
+    def mock_pyaudio_side_effect():
+        nonlocal pyaudio_instantiations
+        pyaudio_instantiations += 1
+        mock_pa = MagicMock()
+        if pyaudio_instantiations < 3:
+            # First two calls: device is missing
+            devices = mock_devices_empty
+        else:
+            # Third call: device is present
+            devices = mock_devices_with_dac
+            
+        mock_pa.get_device_count.return_value = len(devices)
+        mock_pa.get_device_info_by_index.side_effect = lambda idx: devices[idx]
+        mock_pa.get_default_output_device_info.return_value = devices[0]
+        return mock_pa
+
+    with patch("pyaudio.PyAudio", side_effect=mock_pyaudio_side_effect):
+        # We start with device missing, expect 3 retries (0.01s delay)
+        # On attempt 3 it should succeed
+        player = AudioPlayer(
+            output_device="Sabre DAC",
+            reconnect_retries=3,
+            reconnect_delay=0.01
+        )
+        
+        assert player._using_desired_device is True
+        assert pyaudio_instantiations == 3
+        assert player._stream is not None
+        await player.stop()
+
