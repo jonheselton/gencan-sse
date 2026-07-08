@@ -145,6 +145,10 @@ class SpeechEngine:
             timeout_hours=self._config.ip_voice_timeout_hours,
         )
 
+        # Build fallback provider chain
+        self._fallback_providers: list[TTSProvider] = []
+        self._build_fallback_providers()
+
         # Create playback worker (not started yet)
         self._worker = PlaybackWorker(
             tts_provider=self._tts_provider,
@@ -156,6 +160,7 @@ class SpeechEngine:
             min_sentence_length=self._config.min_sentence_length,
             target_chunk_size=self._config.target_chunk_size,
             on_metrics_callback=self._record_chunk_metrics,
+            fallback_providers=self._fallback_providers,
         )
 
         # Activity logging and usage tracking
@@ -408,6 +413,82 @@ class SpeechEngine:
             logger.info("Engine TTS provider switched to %s", provider.name)
             return True
         return False
+
+    def _build_fallback_providers(self) -> None:
+        """Build fallback provider chain from available backends.
+
+        Tries to instantiate each provider in fallback order. Providers
+        that fail to initialise or report as unavailable are skipped
+        with a debug log — they won't slow down startup.
+        """
+        primary_name = self._tts_provider.name
+
+        # Jonbox — self-hosted Coqui VITS
+        if primary_name != "jonbox":
+            try:
+                from gencan_sse.providers.jonbox import JonboxTTSProvider
+                jonbox = JonboxTTSProvider(
+                    base_url=self._config.jonbox_base_url or "http://localhost:8080",
+                )
+                if jonbox.is_available:
+                    self._fallback_providers.append(jonbox)
+                    logger.debug("Fallback provider added: jonbox")
+                else:
+                    logger.debug("Jonbox provider not available, skipping fallback")
+            except Exception as exc:
+                logger.debug("Failed to create Jonbox fallback provider: %s", exc)
+
+        # Kokoro — local Metal-accelerated (MLX)
+        if primary_name != "kokoro":
+            try:
+                from gencan_sse.providers.kokoro import KokoroTTSProvider
+                kokoro = KokoroTTSProvider()
+                if kokoro.is_available:
+                    self._fallback_providers.append(kokoro)
+                    logger.debug("Fallback provider added: kokoro")
+                else:
+                    logger.debug("Kokoro provider not available, skipping fallback")
+            except Exception as exc:
+                logger.debug("Failed to create Kokoro fallback provider: %s", exc)
+
+        # AVFoundation — macOS native, offline fallback
+        if primary_name != "avfoundation":
+            try:
+                import sys
+                if sys.platform == "darwin":
+                    from gencan_sse.providers.avfoundation import AVFoundationTTSProvider
+                    avf = AVFoundationTTSProvider()
+                    if avf.is_available:
+                        self._fallback_providers.append(avf)
+                        logger.debug("Fallback provider added: avfoundation")
+                    else:
+                        logger.debug("AVFoundation provider not available, skipping fallback")
+            except Exception as exc:
+                logger.debug("Failed to create AVFoundation fallback provider: %s", exc)
+
+        # Gemini — if not already primary, add as fallback
+        if primary_name != "gemini":
+            try:
+                from gencan_sse.providers.gemini import GeminiTTSProvider
+                gemini = GeminiTTSProvider(
+                    model=self._config.tts_model,
+                    fallback_models=self._config.tts_fallback_models,
+                    requests_per_minute=self._config.tts_requests_per_minute,
+                    round_robin_mode=self._config.tts_round_robin,
+                )
+                if gemini.is_available:
+                    self._fallback_providers.append(gemini)
+                    logger.debug("Fallback provider added: gemini")
+                else:
+                    logger.debug("Gemini provider not available, skipping fallback")
+            except Exception as exc:
+                logger.debug("Failed to create Gemini fallback provider: %s", exc)
+
+        logger.info(
+            "Fallback provider chain: [%s] -> %s",
+            primary_name,
+            [p.name for p in self._fallback_providers] or "(none)",
+        )
 
     # ------------------------------------------------------------------
     # Status

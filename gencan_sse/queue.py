@@ -103,8 +103,10 @@ class PlaybackWorker:
         min_sentence_length: int = 5,
         target_chunk_size: int = 250,
         on_metrics_callback=None,
+        fallback_providers: 'Optional[list[TTSProvider]]' = None,
     ) -> None:
         self._tts = tts_provider
+        self._fallback_providers: list[TTSProvider] = fallback_providers or []
         self._player = audio_player
         self._filter = text_filter
         self._voice_map = voice_map
@@ -295,22 +297,11 @@ class PlaybackWorker:
         chunks = chunk_sentences(msg.text, min_length=self._min_sentence_length, target_chunk_size=self._target_chunk_size)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
-                async with self._synthesis_semaphore:
-                    t0 = time.time()
-                    pcm, metadata = await self._tts.synthesize(text, msg.voice, msg.style)
-                latency = time.time() - t0
-                if self._on_metrics:
-                    metric_data = {
-                        "latency_ms": latency * 1000,
-                        "audio_bytes": len(pcm) if pcm else 0,
-                        "text_length": len(text),
-                    }
-                    if metadata:
-                        metric_data.update(metadata)
-                    self._on_metrics(metric_data)
-
+                pcm, metadata = await self._synthesize_with_fallback(
+                    text, msg.voice, msg.style,
+                )
                 if not pcm:
-                    logger.warning("TTS returned empty response for speak request")
+                    logger.warning("All TTS providers returned empty response for speak request")
                     await self._player.enqueue_error_chime()
                 return pcm
 
@@ -358,22 +349,11 @@ class PlaybackWorker:
         chunks = chunk_sentences(filtered, min_length=self._min_sentence_length, target_chunk_size=self._target_chunk_size)
         for chunk in chunks:
             async def _synthesize(text=chunk) -> Optional[bytes]:
-                async with self._synthesis_semaphore:
-                    t0 = time.time()
-                    pcm, metadata = await self._tts.synthesize(text, voice_name, style_prefix)
-                latency = time.time() - t0
-                if self._on_metrics:
-                    metric_data = {
-                        "latency_ms": latency * 1000,
-                        "audio_bytes": len(pcm) if pcm else 0,
-                        "text_length": len(text),
-                    }
-                    if metadata:
-                        metric_data.update(metadata)
-                    self._on_metrics(metric_data)
-
+                pcm, metadata = await self._synthesize_with_fallback(
+                    text, voice_name, style_prefix,
+                )
                 if not pcm:
-                    logger.warning("TTS returned empty response for event chunk")
+                    logger.warning("All TTS providers returned empty response for event chunk")
                     await self._player.enqueue_error_chime()
                 return pcm
 
@@ -384,6 +364,64 @@ class PlaybackWorker:
                 timestamp=msg.timestamp,
             )
             await self._player.enqueue(task)
+
+    async def _synthesize_with_fallback(
+        self,
+        text: str,
+        voice: str,
+        style: str,
+    ) -> tuple[bytes, dict]:
+        """Try primary provider, then each fallback provider until one succeeds.
+
+        Returns:
+            A tuple of (PCM audio bytes, metadata dict).
+            Returns (b"", {}) only if all providers fail.
+        """
+        providers = [self._tts] + [
+            p for p in self._fallback_providers if p.is_available
+        ]
+
+        for i, provider in enumerate(providers):
+            try:
+                async with self._synthesis_semaphore:
+                    t0 = time.time()
+                    pcm, metadata = await provider.synthesize(text, voice, style)
+                latency = time.time() - t0
+
+                if self._on_metrics:
+                    metric_data = {
+                        "latency_ms": latency * 1000,
+                        "audio_bytes": len(pcm) if pcm else 0,
+                        "text_length": len(text),
+                    }
+                    if metadata:
+                        metric_data.update(metadata)
+                    self._on_metrics(metric_data)
+
+                if pcm:
+                    if i > 0:
+                        logger.info(
+                            "Fallback provider %s succeeded after primary "
+                            "provider %s returned empty audio",
+                            provider.name,
+                            self._tts.name,
+                        )
+                    return pcm, metadata
+
+                logger.warning(
+                    "TTS provider %s returned empty audio for text "
+                    "(len=%d), trying next provider...",
+                    provider.name,
+                    len(text),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "TTS provider %s raised exception: %s, trying next provider...",
+                    provider.name,
+                    exc,
+                )
+
+        return b"", {}
 
     async def _handle_control(self, msg: ControlMessage) -> None:
         """Handle a control message."""
@@ -432,8 +470,19 @@ class PlaybackWorker:
         elif action == "set_provider":
             new_provider = msg.payload.get("provider")
             if new_provider:
+                old_tts = self._tts
                 self._tts = new_provider
-                logger.info("TTS provider switched to %s", new_provider.name)
+                # Add old primary to front of fallback chain if it's not
+                # already present, so it remains available as a fallback.
+                if old_tts not in self._fallback_providers:
+                    self._fallback_providers.insert(0, old_tts)
+                # Remove new primary from fallback list if present
+                self._fallback_providers = [
+                    p for p in self._fallback_providers if p is not new_provider
+                ]
+                logger.info("TTS provider switched to %s (fallbacks: %s)",
+                            new_provider.name,
+                            [p.name for p in self._fallback_providers])
 
         else:
             logger.warning("Unknown control action: %s", action)
