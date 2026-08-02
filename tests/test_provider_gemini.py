@@ -160,3 +160,21 @@ class TestCircuitBreaker:
                 remaining = provider.model_cooldown_remaining(provider._model)
                 assert remaining > 0
                 assert remaining <= 60.0
+
+    @pytest.mark.asyncio
+    async def test_429_cooldown_capping(self):
+        with patch.dict("os.environ", {"AI_STUDIO_KEY": "test-key"}):
+            with patch("google.genai.Client") as mock_client_cls:
+                mock_client = MagicMock()
+                mock_client_cls.return_value = mock_client
+                # Simulate 429 error with 4327s retry delay
+                mock_client.models.generate_content.side_effect = Exception('429 RESOURCE_EXHAUSTED: "retryDelay": "4327s"')
+                provider = GeminiTTSProvider(max_429_cooldown=45.0)
+                audio, meta = await provider.synthesize("test text")
+                assert audio == b""
+                assert meta == {}
+                # Cooldown should be capped at 45.0s instead of 4327s
+                remaining = provider.model_cooldown_remaining(provider._model)
+                assert remaining > 0
+                assert remaining <= 45.0
+

@@ -65,6 +65,7 @@ class GeminiTTSProvider:
         circuit_break_cooldown: float = 60.0,
         requests_per_minute: float = 10.0,
         round_robin_mode: bool = False,
+        max_429_cooldown: float = 60.0,
     ) -> None:
         """Initialise the Gemini TTS provider.
 
@@ -78,11 +79,12 @@ class GeminiTTSProvider:
             circuit_break_cooldown: Default seconds to wait before retrying
                 after a circuit opens.
             requests_per_minute: Outbound API request rate limit (RPM).
+            max_429_cooldown: Maximum cooldown in seconds for 429 rate limit errors.
         """
         logger.debug(
             "GeminiTTSProvider.__init__: model=%s, fallback_models=%s, "
             "max_concurrent=%d, max_retries=%d, circuit_threshold=%d, "
-            "circuit_cooldown=%.1fs, requests_per_minute=%.1f",
+            "circuit_cooldown=%.1fs, requests_per_minute=%.1f, max_429_cooldown=%.1fs",
             model,
             fallback_models,
             max_concurrent,
@@ -90,6 +92,7 @@ class GeminiTTSProvider:
             circuit_break_threshold,
             circuit_break_cooldown,
             requests_per_minute,
+            max_429_cooldown,
         )
 
         self._model = model
@@ -127,6 +130,7 @@ class GeminiTTSProvider:
         self._max_retries = max_retries
         self._circuit_break_threshold = circuit_break_threshold
         self._circuit_break_cooldown = circuit_break_cooldown
+        self._max_429_cooldown = max_429_cooldown
         
         self._round_robin_mode = round_robin_mode
         self._round_robin_idx = 0
@@ -575,14 +579,17 @@ class GeminiTTSProvider:
                         if retry_delay
                         else self._circuit_break_cooldown
                     )
+                    cooldown = min(cooldown, getattr(self, "_max_429_cooldown", 60.0))
                     logger.warning(
                         "Rate limited (429) on model %s. Opening circuit "
-                        "for %.0fs.",
+                        "for capped cooldown of %.0fs (raw delay: %s).",
                         model,
                         cooldown,
+                        retry_delay,
                     )
                     self._open_model_circuit(model, cooldown)
                     return b"", {}  # Stop retrying this model on 429
+
 
                 # Check circuit breaker threshold for other errors
                 if failures >= self._circuit_break_threshold:

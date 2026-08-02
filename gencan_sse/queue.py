@@ -278,6 +278,7 @@ class PlaybackWorker:
     async def _handle_message(self, msg: QueueMessage) -> None:
         """Route a message to the appropriate handler."""
         if isinstance(msg, SpeakMessage):
+            msg = self._coalesce_speak_messages(msg)
             await self._handle_speak(msg)
         elif isinstance(msg, EventMessage):
             await self._handle_event(msg)
@@ -286,7 +287,54 @@ class PlaybackWorker:
         else:
             logger.warning("Unknown message type: %s", type(msg))
 
+    def _coalesce_speak_messages(self, first_msg: SpeakMessage) -> SpeakMessage:
+        """Coalesce consecutive pending SpeakMessages in queue with matching parameters."""
+        if self._queue is None or self._queue.empty():
+            return first_msg
+
+        combined_text = first_msg.text
+        messages_to_requeue: list[QueueMessage] = []
+
+        while not self._queue.empty():
+            try:
+                next_msg = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            if (
+                isinstance(next_msg, SpeakMessage)
+                and next_msg.voice == first_msg.voice
+                and next_msg.style == first_msg.style
+                and next_msg.priority == first_msg.priority
+                and next_msg.event_type == first_msg.event_type
+                and (len(combined_text) + len(next_msg.text)) <= 3000
+            ):
+                if combined_text and not combined_text.endswith((" ", "\n", "\t")):
+                    combined_text += " "
+                combined_text += next_msg.text
+            else:
+                messages_to_requeue.append(next_msg)
+                break
+
+        # Re-queue non-matching item if any was popped
+        for m in reversed(messages_to_requeue):
+            try:
+                self._queue.put_nowait(m)
+            except asyncio.QueueFull:
+                break
+
+        if len(combined_text) != len(first_msg.text):
+            logger.debug(
+                "Coalesced queued speak messages: %d chars -> %d chars",
+                len(first_msg.text),
+                len(combined_text),
+            )
+            first_msg.text = combined_text
+
+        return first_msg
+
     async def _handle_speak(self, msg: SpeakMessage) -> None:
+
         """Handle a direct speak request."""
         if not msg.text or not msg.text.strip():
             return

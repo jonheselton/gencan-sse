@@ -23,9 +23,9 @@ class MockTTSProvider:
         self._audio = audio_bytes
         self.calls: list[tuple[str, str, str]] = []
 
-    async def synthesize(self, text: str, voice: str = "Kore", style: str = "") -> bytes:
+    async def synthesize(self, text: str, voice: str = "Kore", style: str = "") -> tuple[bytes, dict]:
         self.calls.append((text, voice, style))
-        return self._audio
+        return self._audio, {}
 
     @property
     def is_available(self) -> bool:
@@ -34,6 +34,7 @@ class MockTTSProvider:
     @property
     def name(self) -> str:
         return "mock-tts"
+
 
 
 @pytest.fixture
@@ -198,8 +199,13 @@ class TestSpeakQueuing:
             assert r3.status == "queued"
             time.sleep(1.0)
 
-        # All three should have reached the provider
-        assert len(mock_provider.calls) >= 3
+        # All three should have reached the provider (coalesced into single or multiple calls)
+        assert len(mock_provider.calls) >= 1
+        all_text = " ".join(call[0] for call in mock_provider.calls)
+        assert "First sentence." in all_text
+        assert "Second sentence." in all_text
+        assert "Third sentence." in all_text
+
 
 
 # ---------------------------------------------------------------------------

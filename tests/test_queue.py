@@ -111,3 +111,22 @@ class TestPlaybackWorker:
         worker = self._make_worker()
         depth = worker.submit(SpeakMessage(text="hello"))
         assert depth >= 1
+
+    def test_coalesce_speak_messages(self):
+        worker = self._make_worker()
+        worker._queue = asyncio.Queue()
+        msg1 = SpeakMessage(text="Hello", voice="Kore", style="")
+        msg2 = SpeakMessage(text="world", voice="Kore", style="")
+        msg3 = SpeakMessage(text="!", voice="Kore", style="")
+        msg4 = SpeakMessage(text="Different voice", voice="Fenrir", style="")
+
+        worker._queue.put_nowait(msg2)
+        worker._queue.put_nowait(msg3)
+        worker._queue.put_nowait(msg4)
+
+        result = worker._coalesce_speak_messages(msg1)
+        assert result.text == "Hello world !"
+        # Non-matching msg4 should be left in queue
+        assert worker._queue.qsize() == 1
+        assert worker._queue.get_nowait().voice == "Fenrir"
+
