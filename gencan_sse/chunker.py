@@ -56,7 +56,8 @@ def split_by_words(text: str, max_size: int = 400) -> list[str]:
     return chunks
 
 
-def chunk_sentences(text: str, min_length: int = 5, target_chunk_size: int = 250, max_chunk_size: int = 400) -> list[str]:
+def chunk_sentences(text: str, min_length: int = 5, target_chunk_size: int = 1000, max_chunk_size: int = 2000) -> list[str]:
+
     """Split text into sentence-sized chunks for natural TTS delivery.
 
     Args:

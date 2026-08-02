@@ -62,3 +62,13 @@ class TestChunkSentences:
         recombined = " ".join(result)
         assert "quick brown fox" in recombined
         assert "lazy dog" in recombined
+
+    def test_large_paragraph_chunking(self):
+        # 800-char paragraph should remain in 1 chunk with target_chunk_size=1000
+        sentences = [f"Sentence number {i} is here." for i in range(30)]
+        paragraph = " ".join(sentences)
+        result = chunk_sentences(paragraph)
+        # Verify result chunks are grouped up to 1000 characters
+        assert all(len(c) <= 2000 for c in result)
+        assert len(result) < len(sentences)  # Significantly fewer chunks than sentences
+

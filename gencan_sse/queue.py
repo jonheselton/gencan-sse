@@ -101,8 +101,9 @@ class PlaybackWorker:
         voice_router: 'Optional[VoiceRouter]' = None,
         code_block_chime: bool = True,
         min_sentence_length: int = 5,
-        target_chunk_size: int = 250,
+        target_chunk_size: int = 1000,
         on_metrics_callback=None,
+
         fallback_providers: 'Optional[list[TTSProvider]]' = None,
     ) -> None:
         self._tts = tts_provider
