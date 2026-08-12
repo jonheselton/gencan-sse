@@ -5,9 +5,31 @@ import sys
 import urllib.request
 import urllib.error
 
+import re
+import urllib.parse
+
+def sanitize_host_port(host: str, port: int) -> tuple[str, int]:
+    """Sanitize and validate host and port arguments to prevent SSRF."""
+    clean_host = host.strip()
+    if not re.match(r"^[a-zA-Z0-9.\-_]+$", clean_host):
+        raise ValueError(f"Invalid host address: {clean_host}")
+
+    clean_port = int(port)
+    if not (1 <= clean_port <= 65535):
+        raise ValueError(f"Port number out of valid range: {clean_port}")
+
+    return clean_host, clean_port
+
+
 def send_control_request(host: str, port: int, action: str, payload: dict | None = None) -> None:
     """Send a control request to the running gencan daemon."""
-    url = f"http://{host}:{port}/control"
+    try:
+        clean_host, clean_port = sanitize_host_port(host, port)
+    except ValueError as err:
+        print(f"Configuration error: {err}", file=sys.stderr)
+        sys.exit(1)
+
+    url = f"http://{clean_host}:{clean_port}/control"
     req_data = json.dumps({"action": action, "payload": payload or {}}).encode("utf-8")
     req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
     try:
@@ -21,7 +43,14 @@ def send_control_request(host: str, port: int, action: str, payload: dict | None
 
 def fetch_history(host: str, port: int, limit: int = 20) -> None:
     """Fetch spoken history from the daemon."""
-    url = f"http://{host}:{port}/history?limit={limit}"
+    try:
+        clean_host, clean_port = sanitize_host_port(host, port)
+    except ValueError as err:
+        print(f"Configuration error: {err}", file=sys.stderr)
+        sys.exit(1)
+
+    clean_limit = max(1, min(100, int(limit)))
+    url = f"http://{clean_host}:{clean_port}/history?limit={clean_limit}"
     try:
         with urllib.request.urlopen(url) as resp:
             data = json.loads(resp.read().decode("utf-8"))

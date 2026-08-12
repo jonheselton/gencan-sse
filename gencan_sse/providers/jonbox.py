@@ -25,9 +25,10 @@ class JonboxTTSProvider:
         else:
             try:
                 from google import genai
-                logger.debug("Initializing Jonbox genai client at %s", self._base_url)
+                import os
+                api_key = os.environ.get("JONBOX_API_KEY") or os.environ.get("GEMINI_API_KEY") or os.environ.get("AI_STUDIO_KEY") or "none"
                 self._client = genai.Client(
-                    api_key="jonbox_dummy_key",
+                    api_key=api_key,
                     http_options={"base_url": self._base_url},
                 )
                 logger.info("Jonbox TTS provider initialized")
