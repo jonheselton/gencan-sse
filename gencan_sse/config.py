@@ -113,14 +113,14 @@ class EngineConfig:
     """
 
     # -- TTS settings -------------------------------------------------------
-    tts_model: str = "gemini-3.1-flash-tts-preview"
+    tts_model: str = "gemini-2.5-flash-preview-tts"
     tts_fallback_models: list[str] = field(
         default_factory=lambda: [
-            "gemini-3.1-flash-tts-preview",
             "gemini-2.5-flash-preview-tts",
             "gemini-2.5-pro-preview-tts",
         ]
     )
+
     tts_requests_per_minute: float = 10.0
     tts_round_robin: bool = False
     jonbox_base_url: Optional[str] = None

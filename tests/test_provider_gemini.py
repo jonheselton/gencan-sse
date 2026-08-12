@@ -32,7 +32,7 @@ class TestGeminiTTSProviderInit:
         with patch.dict("os.environ", {"AI_STUDIO_KEY": "test-key"}):
             with patch("google.genai.Client"):
                 provider = GeminiTTSProvider()
-                assert provider._model == "gemini-3.1-flash-tts-preview"
+                assert provider._model == "gemini-2.5-flash-preview-tts"
 
     def test_custom_model(self):
         with patch.dict("os.environ", {"AI_STUDIO_KEY": "test-key"}):
@@ -53,7 +53,6 @@ class TestGeminiTTSProviderInit:
         with patch.dict("os.environ", {"AI_STUDIO_KEY": "test-key"}):
             with patch("google.genai.Client"):
                 provider = GeminiTTSProvider()
-                assert "gemini-3.1-flash-tts-preview" in provider._models
                 assert "gemini-2.5-flash-preview-tts" in provider._models
                 assert "gemini-2.5-pro-preview-tts" in provider._models
 

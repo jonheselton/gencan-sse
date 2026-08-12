@@ -9,7 +9,7 @@ class TestEngineConfigDefaults:
 
     def test_zero_config(self):
         config = EngineConfig()
-        assert config.tts_model == "gemini-3.1-flash-tts-preview"
+        assert config.tts_model == "gemini-2.5-flash-preview-tts"
         assert config.sample_rate == 24000
         assert config.sample_width == 2
         assert config.channels == 1

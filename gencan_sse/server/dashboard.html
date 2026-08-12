@@ -765,6 +765,41 @@
                 </div>
             </div>
 
+            <!-- Away Mode & Spoken History Controls Card -->
+            <div class="card">
+                <div class="card-title">
+                    <span>Away Mode & Spoken History</span>
+                    <span style="font-size: 0.8rem; background: rgba(99,102,241,0.1); color: var(--accent-indigo); padding: 2px 8px; border-radius: 4px;" id="awayStatusBadge">PRESENT</span>
+                </div>
+
+                <div class="playback-controls" style="margin-bottom: 1rem;">
+                    <button class="btn btn-warning" id="pauseBtn" onclick="togglePause()">
+                        ⏸️ Pause
+                    </button>
+                    <button class="btn btn-primary" id="awayBtn" onclick="toggleAwayMode()">
+                        🌙 Away Mode
+                    </button>
+                    <button class="btn btn-secondary" onclick="replayLast()">
+                        ↩️ Replay
+                    </button>
+                    <button class="btn btn-secondary" onclick="triggerCatchup()">
+                        📝 Catch-Up
+                    </button>
+                </div>
+
+                <div class="diagnostic-row">
+                    <span>Unread Spoken Updates</span>
+                    <span class="diagnostic-val" id="unreadCountVal">0 updates</span>
+                </div>
+
+                <div style="margin-top: 1rem;">
+                    <div style="font-size: 0.85rem; font-weight: 600; color: var(--color-text-muted); margin-bottom: 0.5rem;">SPOKEN HISTORY FEED</div>
+                    <div id="spokenHistoryFeed" style="max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;">
+                        <div class="log-empty" style="height: 100px;">No spoken history recorded yet.</div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Usage & Diagnostics Card -->
             <div class="card">
                 <div class="card-title">
@@ -941,6 +976,8 @@
         const API_BASE = ""; // Relative to server
         let previousVolume = 80;
         let isMuted = false;
+        let isPaused = false;
+        let isAway = false;
         let voicesList = ["Kore", "Zephyr", "Puck", "Charon", "Fenrir", "Enceladus", "Aoede", "Calliope"];
 
         // Poll server status on load and periodically
@@ -982,6 +1019,38 @@
                 } else {
                     cb.className = "diagnostic-val healthy";
                     cb.textContent = "Healthy";
+                }
+
+                // Update Pause & Away Mode controls
+                if (status.is_paused !== undefined) {
+                    isPaused = status.is_paused;
+                    const pauseBtn = document.getElementById("pauseBtn");
+                    if (pauseBtn) {
+                        pauseBtn.innerHTML = isPaused ? "▶️ Resume" : "⏸️ Pause";
+                        pauseBtn.className = isPaused ? "btn btn-primary" : "btn btn-warning";
+                    }
+                }
+
+                if (status.is_away !== undefined) {
+                    isAway = status.is_away;
+                    const awayBtn = document.getElementById("awayBtn");
+                    const badge = document.getElementById("awayStatusBadge");
+                    if (awayBtn) {
+                        awayBtn.innerHTML = isAway ? "🏠 Return (Present)" : "🌙 Away Mode";
+                        awayBtn.className = isAway ? "btn btn-danger" : "btn btn-primary";
+                    }
+                    if (badge) {
+                        badge.textContent = isAway ? "AWAY MODE" : "PRESENT";
+                        badge.style.background = isAway ? "rgba(244,63,94,0.1)" : "rgba(99,102,241,0.1)";
+                        badge.style.color = isAway ? "var(--accent-rose)" : "var(--accent-indigo)";
+                    }
+                }
+
+                if (status.unread_count !== undefined) {
+                    const unreadVal = document.getElementById("unreadCountVal");
+                    if (unreadVal) {
+                        unreadVal.textContent = `${status.unread_count} update${status.unread_count === 1 ? '' : 's'}`;
+                    }
                 }
 
                 // Update Billing / Usage Stats
@@ -1432,15 +1501,88 @@
             }
         }
 
+        async function togglePause() {
+            const action = isPaused ? "resume" : "pause";
+            await fetch(`${API_BASE}/control`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: action })
+            });
+            fetchStatus();
+        }
+
+        async function toggleAwayMode() {
+            const newAwayState = !isAway;
+            await fetch(`${API_BASE}/control`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "set_away_mode", payload: { enabled: newAwayState } })
+            });
+            fetchStatus();
+        }
+
+        async function replayLast() {
+            await fetch(`${API_BASE}/control`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "replay", payload: { count: 1 } })
+            });
+            fetchHistory();
+        }
+
+        async function triggerCatchup() {
+            await fetch(`${API_BASE}/control`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "catchup_summary" })
+            });
+            fetchHistory();
+        }
+
+        async function fetchHistory() {
+            try {
+                const res = await fetch(`${API_BASE}/history?limit=25`);
+                if (!res.ok) return;
+                const data = await res.json();
+                renderHistory(data.history);
+            } catch (err) {
+                console.error("Fetch history failed:", err);
+            }
+        }
+
+        function renderHistory(items) {
+            const container = document.getElementById("spokenHistoryFeed");
+            if (!container) return;
+            if (!items || items.length === 0) {
+                container.innerHTML = '<div class="log-empty" style="height:100px;">No spoken history recorded yet.</div>';
+                return;
+            }
+            container.innerHTML = items.map(item => {
+                const time = new Date(item.timestamp * 1000).toLocaleTimeString();
+                const awayTag = item.was_away ? '<span style="font-size:0.7rem;background:rgba(244,63,94,0.15);color:var(--accent-rose);padding:1px 5px;border-radius:4px;margin-left:6px;">AWAY</span>' : '';
+                return `
+                    <div class="log-entry" style="padding:6px 10px;">
+                        <span class="log-timestamp">${time}</span>
+                        <div class="log-meta">
+                            <span class="log-voice">${escapeHTML(item.voice)}</span>
+                        </div>
+                        <div class="log-content">${escapeHTML(item.text)}${awayTag}</div>
+                    </div>
+                `;
+            }).reverse().join("");
+        }
+
         // Initialize polling
         fetchStatus();
         fetchProviders();
         fetchLogs();
         fetchSystemLogs();
+        fetchHistory();
         setInterval(fetchStatus, 1500);
         setInterval(fetchProviders, 15000);
         setInterval(fetchLogs, 1500);
         setInterval(fetchSystemLogs, 1500);
+        setInterval(fetchHistory, 2000);
     </script>
 </body>
 </html>

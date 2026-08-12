@@ -214,6 +214,18 @@ async def control(request: ControlRequest, req: Request):
         engine.stop_audio()
     elif action == "flush":
         engine.flush_queue(payload.get("event_type", ""))
+    elif action == "pause":
+        engine.pause()
+    elif action == "resume":
+        engine.resume()
+    elif action == "set_away_mode":
+        engine.set_away_mode(payload.get("enabled", True))
+    elif action == "replay":
+        res = engine.replay(count=payload.get("count", 1), unread_only=payload.get("unread_only", False))
+        return {"status": res.status, "message": res.message, "action": request.action}
+    elif action == "catchup_summary":
+        res = engine.speak_catchup_summary()
+        return {"status": res.status, "message": res.message, "action": request.action}
     elif action == "set_volume":
         try:
             vol_val = payload.get("volume", 0.8)
@@ -253,7 +265,23 @@ async def get_status(req: Request):
         is_running=status.is_running,
         queue_depth=status.queue_depth,
         tts_available=status.tts_available,
+        is_paused=engine.is_paused,
+        is_away=engine.is_away,
+        unread_count=engine.history.unread_count,
+        history_count=engine.history.total_count,
     )
+
+
+@app.get("/history", summary="Get spoken history buffer")
+async def get_history(req: Request, limit: int = 50):
+    """Retrieve recent spoken history entries."""
+    engine = get_engine(req)
+    return {
+        "status": "ok",
+        "history": engine.history.to_dict_list(limit=limit),
+        "unread_count": engine.history.unread_count,
+        "total_count": engine.history.total_count,
+    }
 
 
 # -------------------------------------------------------------------------

@@ -58,7 +58,7 @@ def tmp_yaml_config(tmp_path: Path) -> Path:
     """
     config_content = """\
 tts:
-  model: gemini-3.1-flash-tts-preview
+  model: gemini-2.5-flash-preview-tts
   sample_rate: 24000
   sample_width: 2
   channels: 1

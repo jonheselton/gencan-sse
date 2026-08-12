@@ -473,10 +473,24 @@ class PlaybackWorker:
         return b"", {}
 
     async def _handle_control(self, msg: ControlMessage) -> None:
-        """Handle a control message."""
+        """Process a control message."""
         action = msg.action
+        logger.info("Processing control message: %s", action)
 
-        if action == "set_volume":
+        if action == "pause":
+            self._player.pause()
+            logger.debug("Player paused via control message")
+
+        elif action == "resume":
+            self._player.resume()
+            logger.debug("Player resumed via control message")
+
+        elif action == "set_away_mode":
+            enabled = bool(msg.payload.get("enabled", True))
+            self._player.set_away_mode(enabled)
+            logger.debug("Away mode set to %s via control message", enabled)
+
+        elif action == "set_volume":
             volume = float(msg.payload.get("volume", 0.8))
             self._player.set_volume(volume)
             logger.debug("Volume set to %.2f", self._player.volume)
