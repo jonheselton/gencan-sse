@@ -1081,23 +1081,41 @@
                     // Provider usage
                     const pContainer = document.getElementById("providerUsageContainer");
                     if (status.usage.by_provider && Object.keys(status.usage.by_provider).length > 0) {
-                        pContainer.innerHTML = Object.entries(status.usage.by_provider).map(([prov, stats]) => `
-                            <div class="diagnostic-row">
-                                <span>${escapeHTML(prov)}</span>
-                                <span class="diagnostic-val">${stats.requests} reqs</span>
-                            </div>
-                        `).join('');
+                        pContainer.replaceChildren();
+                        Object.entries(status.usage.by_provider).forEach(([prov, stats]) => {
+                            const row = document.createElement("div");
+                            row.className = "diagnostic-row";
+                            const span1 = document.createElement("span");
+                            span1.textContent = prov;
+                            const span2 = document.createElement("span");
+                            span2.className = "diagnostic-val";
+                            span2.textContent = `${stats.requests} reqs`;
+                            row.appendChild(span1);
+                            row.appendChild(span2);
+                            pContainer.appendChild(row);
+                        });
                     }
 
                     // Model usage
                     const mContainer = document.getElementById("modelUsageContainer");
                     if (status.usage.by_model && Object.keys(status.usage.by_model).length > 0) {
-                        mContainer.innerHTML = Object.entries(status.usage.by_model).map(([mod, stats]) => `
-                            <div class="diagnostic-row">
-                                <span style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHTML(mod)}</span>
-                                <span class="diagnostic-val">${stats.requests} reqs</span>
-                            </div>
-                        `).join('');
+                        mContainer.replaceChildren();
+                        Object.entries(status.usage.by_model).forEach(([mod, stats]) => {
+                            const row = document.createElement("div");
+                            row.className = "diagnostic-row";
+                            const span1 = document.createElement("span");
+                            span1.style.maxWidth = "140px";
+                            span1.style.overflow = "hidden";
+                            span1.style.textOverflow = "ellipsis";
+                            span1.style.whiteSpace = "nowrap";
+                            span1.textContent = mod;
+                            const span2 = document.createElement("span");
+                            span2.className = "diagnostic-val";
+                            span2.textContent = `${stats.requests} reqs`;
+                            row.appendChild(span1);
+                            row.appendChild(span2);
+                            mContainer.appendChild(row);
+                        });
                     }
                 }
 
@@ -1159,24 +1177,42 @@
                 return;
             }
 
-            const currentHTML = filteredLogs.map(log => {
+            const entries = filteredLogs.slice().reverse().map(log => {
                 const date = new Date(log.timestamp * 1000);
                 const time = date.toLocaleTimeString();
-                const levelClass = `level-${log.level.toLowerCase()}`;
-                
-                return `
-                    <div class="log-entry-system ${levelClass}">
-                        <div class="system-log-meta">
-                            <span class="system-log-time">${time}</span>
-                            <span class="system-log-level">${escapeHTML(log.level)}</span>
-                            <span class="system-log-logger">${escapeHTML(log.logger)}</span>
-                        </div>
-                        <div class="system-log-message">${escapeHTML(log.message)}</div>
-                    </div>
-                `;
-            }).reverse().join(""); // Show newest on top
-            
-            logsContainer.innerHTML = currentHTML;
+
+                const div = document.createElement("div");
+                div.className = `log-entry-system level-${(log.level || "").toLowerCase()}`;
+
+                const meta = document.createElement("div");
+                meta.className = "system-log-meta";
+
+                const timeSpan = document.createElement("span");
+                timeSpan.className = "system-log-time";
+                timeSpan.textContent = time;
+
+                const levelSpan = document.createElement("span");
+                levelSpan.className = "system-log-level";
+                levelSpan.textContent = log.level || "";
+
+                const loggerSpan = document.createElement("span");
+                loggerSpan.className = "system-log-logger";
+                loggerSpan.textContent = log.logger || "";
+
+                meta.appendChild(timeSpan);
+                meta.appendChild(levelSpan);
+                meta.appendChild(loggerSpan);
+
+                const msgDiv = document.createElement("div");
+                msgDiv.className = "system-log-message";
+                msgDiv.textContent = log.message || "";
+
+                div.appendChild(meta);
+                div.appendChild(msgDiv);
+                return div;
+            });
+
+            logsContainer.replaceChildren(...entries);
         }
 
         function updateUptimeText(seconds) {
@@ -1253,27 +1289,49 @@
         function renderLogs(logs) {
             const logsContainer = document.getElementById("activityLogs");
             if (!logs || logs.length === 0) {
-                logsContainer.innerHTML = '<div class="log-empty">No speech activity logged yet. Start speaking!</div>';
+                logsContainer.replaceChildren();
+                const empty = document.createElement("div");
+                empty.className = "log-empty";
+                empty.textContent = "No speech activity logged yet. Start speaking!";
+                logsContainer.appendChild(empty);
                 return;
             }
 
-            const currentHTML = logs.map(log => {
+            const entries = logs.slice().reverse().map(log => {
                 const time = new Date(log.timestamp * 1000).toLocaleTimeString();
-                const badgeClass = `badge-${escapeHTML(log.event_type.toLowerCase())}`;
                 
-                return `
-                    <div class="log-entry">
-                        <span class="log-timestamp">${time}</span>
-                        <div class="log-meta">
-                            <span class="event-type-badge ${badgeClass}">${escapeHTML(log.event_type)}</span>
-                            <span class="log-voice">${escapeHTML(log.voice_name)}</span>
-                        </div>
-                        <div class="log-content">${escapeHTML(log.text)}</div>
-                    </div>
-                `;
-            }).reverse().join(""); // Show newest on top
-            
-            logsContainer.innerHTML = currentHTML;
+                const entry = document.createElement("div");
+                entry.className = "log-entry";
+
+                const timestampSpan = document.createElement("span");
+                timestampSpan.className = "log-timestamp";
+                timestampSpan.textContent = time;
+
+                const metaDiv = document.createElement("div");
+                metaDiv.className = "log-meta";
+
+                const badgeSpan = document.createElement("span");
+                badgeSpan.className = `event-type-badge badge-${(log.event_type || "").toLowerCase()}`;
+                badgeSpan.textContent = log.event_type || "";
+
+                const voiceSpan = document.createElement("span");
+                voiceSpan.className = "log-voice";
+                voiceSpan.textContent = log.voice_name || "";
+
+                metaDiv.appendChild(badgeSpan);
+                metaDiv.appendChild(voiceSpan);
+
+                const contentDiv = document.createElement("div");
+                contentDiv.className = "log-content";
+                contentDiv.textContent = log.text || "";
+
+                entry.appendChild(timestampSpan);
+                entry.appendChild(metaDiv);
+                entry.appendChild(contentDiv);
+                return entry;
+            });
+
+            logsContainer.replaceChildren(...entries);
         }
 
         function escapeHTML(str) {
@@ -1397,9 +1455,16 @@
                 const select = document.getElementById("providerSelect");
                 // Only rewrite options if not focused, to avoid interrupting selection
                 if (document.activeElement !== select) {
-                    select.innerHTML = data.available.map(p => 
-                        `<option value="${escapeHTML(p)}" ${p === data.current ? 'selected' : ''}>${escapeHTML(p)}</option>`
-                    ).join("");
+                    select.replaceChildren();
+                    data.available.forEach(p => {
+                        const opt = document.createElement("option");
+                        opt.value = p;
+                        opt.textContent = p;
+                        if (p === data.current) {
+                            opt.selected = true;
+                        }
+                        select.appendChild(opt);
+                    });
                 }
             } catch (err) {
                 console.error("Failed to fetch providers:", err);
@@ -1554,22 +1619,55 @@
             const container = document.getElementById("spokenHistoryFeed");
             if (!container) return;
             if (!items || items.length === 0) {
-                container.innerHTML = '<div class="log-empty" style="height:100px;">No spoken history recorded yet.</div>';
+                container.replaceChildren();
+                const empty = document.createElement("div");
+                empty.className = "log-empty";
+                empty.style.height = "100px";
+                empty.textContent = "No spoken history recorded yet.";
+                container.appendChild(empty);
                 return;
             }
-            container.innerHTML = items.map(item => {
+            const entries = items.slice().reverse().map(item => {
                 const time = new Date(item.timestamp * 1000).toLocaleTimeString();
-                const awayTag = item.was_away ? '<span style="font-size:0.7rem;background:rgba(244,63,94,0.15);color:var(--accent-rose);padding:1px 5px;border-radius:4px;margin-left:6px;">AWAY</span>' : '';
-                return `
-                    <div class="log-entry" style="padding:6px 10px;">
-                        <span class="log-timestamp">${time}</span>
-                        <div class="log-meta">
-                            <span class="log-voice">${escapeHTML(item.voice)}</span>
-                        </div>
-                        <div class="log-content">${escapeHTML(item.text)}${awayTag}</div>
-                    </div>
-                `;
-            }).reverse().join("");
+                
+                const entry = document.createElement("div");
+                entry.className = "log-entry";
+                entry.style.padding = "6px 10px";
+
+                const timestampSpan = document.createElement("span");
+                timestampSpan.className = "log-timestamp";
+                timestampSpan.textContent = time;
+
+                const metaDiv = document.createElement("div");
+                metaDiv.className = "log-meta";
+
+                const voiceSpan = document.createElement("span");
+                voiceSpan.className = "log-voice";
+                voiceSpan.textContent = item.voice || "";
+                metaDiv.appendChild(voiceSpan);
+
+                const contentDiv = document.createElement("div");
+                contentDiv.className = "log-content";
+                contentDiv.textContent = item.text || "";
+
+                if (item.was_away) {
+                    const awaySpan = document.createElement("span");
+                    awaySpan.style.fontSize = "0.7rem";
+                    awaySpan.style.background = "rgba(244,63,94,0.15)";
+                    awaySpan.style.color = "var(--accent-rose)";
+                    awaySpan.style.padding = "1px 5px";
+                    awaySpan.style.borderRadius = "4px";
+                    awaySpan.style.marginLeft = "6px";
+                    awaySpan.textContent = "AWAY";
+                    contentDiv.appendChild(awaySpan);
+                }
+
+                entry.appendChild(timestampSpan);
+                entry.appendChild(metaDiv);
+                entry.appendChild(contentDiv);
+                return entry;
+            });
+            container.replaceChildren(...entries);
         }
 
         // Initialize polling
