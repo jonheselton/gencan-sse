@@ -42,6 +42,15 @@ logger = logging.getLogger(__name__)
 MAX_TEXT_BYTES: int = 5000
 
 
+SUPPORTED_GEMINI_VOICES: set[str] = {
+    "achernar", "achird", "algenib", "algieba", "alnilam", "aoede", "autonoe",
+    "callirrhoe", "charon", "despina", "enceladus", "erinome", "fenrir", "gacrux",
+    "iapetus", "kore", "laomedeia", "leda", "orus", "puck", "pulcherrima",
+    "rasalgethi", "sadachbia", "sadaltager", "schedar", "sulafat", "umbriel",
+    "vindemiatrix", "zephyr", "zubenelgenubi",
+}
+
+
 class GeminiTTSProvider:
     """Gemini TTS API wrapper implementing the :class:`TTSProvider` protocol.
 
@@ -57,7 +66,7 @@ class GeminiTTSProvider:
     # ------------------------------------------------------------------ init
     def __init__(
         self,
-        model: str = "gemini-3.1-flash-tts-preview",
+        model: str = "gemini-2.5-flash-preview-tts",
         fallback_models: list[str] | None = None,
         max_concurrent: int = 2,
         max_retries: int = 3,
@@ -67,20 +76,7 @@ class GeminiTTSProvider:
         round_robin_mode: bool = False,
         max_429_cooldown: float = 60.0,
     ) -> None:
-        """Initialise the Gemini TTS provider.
-
-        Args:
-            model: Primary Gemini TTS model identifier.
-            fallback_models: Optional ordered list of fallback model IDs.
-            max_concurrent: Maximum parallel API calls (semaphore size).
-            max_retries: Maximum retry attempts on transient errors.
-            circuit_break_threshold: Consecutive failures before the circuit
-                opens for a given model.
-            circuit_break_cooldown: Default seconds to wait before retrying
-                after a circuit opens.
-            requests_per_minute: Outbound API request rate limit (RPM).
-            max_429_cooldown: Maximum cooldown in seconds for 429 rate limit errors.
-        """
+        """Initialise the Gemini TTS provider."""
         logger.debug(
             "GeminiTTSProvider.__init__: model=%s, fallback_models=%s, "
             "max_concurrent=%d, max_retries=%d, circuit_threshold=%d, "
@@ -103,11 +99,13 @@ class GeminiTTSProvider:
                     self._models.append(m)
         else:
             default_fallbacks = [
-                "gemini-3.1-flash-tts-preview",
                 "gemini-2.5-flash-preview-tts",
                 "gemini-2.5-pro-preview-tts",
             ]
             for m in default_fallbacks:
+                if m not in self._models:
+                    self._models.append(m)
+
                 if m not in self._models:
                     self._models.append(m)
 
@@ -483,6 +481,15 @@ class GeminiTTSProvider:
                         request_text,
                     )
 
+                target_voice = voice_name
+                clean_voice = voice_name.lower().strip() if voice_name else "kore"
+                if model.startswith("gemini") and clean_voice not in SUPPORTED_GEMINI_VOICES:
+                    logger.warning(
+                        "Voice '%s' is not supported by Gemini API. Falling back to default voice 'Kore'.",
+                        voice_name,
+                    )
+                    target_voice = "Kore"
+
                 response = await asyncio.to_thread(
                     client.models.generate_content,
                     model=model,
@@ -492,7 +499,7 @@ class GeminiTTSProvider:
                         "speech_config": {
                             "voice_config": {
                                 "prebuilt_voice_config": {
-                                    "voice_name": voice_name,
+                                    "voice_name": target_voice,
                                 }
                             }
                         },
@@ -520,7 +527,7 @@ class GeminiTTSProvider:
                                 "voice=%s model=%s, api_time=%.3fs",
                                 audio_bytes,
                                 duration_est,
-                                voice_name,
+                                target_voice,
                                 model,
                                 api_elapsed,
                             )
@@ -553,12 +560,41 @@ class GeminiTTSProvider:
                     is_rate_limit = (
                         "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
                     )
-                
+
+                is_not_found = (
+                    getattr(exc, "code", None) == 404
+                    or getattr(exc, "status_code", None) == 404
+                    or "404" in error_str
+                    or "NOT_FOUND" in error_str
+                )
+                if is_not_found:
+                    logger.warning(
+                        "Model %s returned 404 NOT_FOUND — opening circuit and trying next fallback.",
+                        model,
+                    )
+                    self._open_model_circuit(model, 300.0)
+                    return b"", {}
+
+                is_invalid_arg = (
+                    getattr(exc, "code", None) == 400
+                    or getattr(exc, "status_code", None) == 400
+                    or "400" in error_str
+                    or "INVALID_ARGUMENT" in error_str
+                )
+                if is_invalid_arg:
+                    logger.warning(
+                        "TTS API call failed with 400 Invalid Argument for model %s: %s",
+                        model,
+                        exc,
+                    )
+                    return b"", {}
+
                 with self._states_lock:
                     state["consecutive_failures"] = (
                         int(state["consecutive_failures"]) + 1
                     )
                     failures = int(state["consecutive_failures"])
+
 
                 logger.debug(
                     "Exception on model %s attempt %d/%d — type=%s, "

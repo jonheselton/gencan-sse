@@ -40,6 +40,8 @@ from gencan_sse.queue import (
 from gencan_sse.filters import TextFilter
 from gencan_sse.audio_player import AudioPlayer
 from gencan_sse.voice_router import VoiceRouter
+from gencan_sse.history import SpokenHistoryBuffer, HistoryItem
+from gencan_sse.summarizer import generate_catchup_summary
 
 if TYPE_CHECKING:
     from gencan_sse.providers.base import TTSProvider
@@ -164,6 +166,7 @@ class SpeechEngine:
         )
 
         # Activity logging and usage tracking
+        self._history = SpokenHistoryBuffer(capacity=50)
         self._activity_log: list[dict] = []
         self._usage_stats: dict = {
             "total_characters": 0,
@@ -272,6 +275,14 @@ class SpeechEngine:
         )
         depth = self._worker.submit(msg)
 
+        self._history.add_item(HistoryItem(
+            text=text,
+            voice=voice,
+            style=style,
+            event_type=event_type.value if hasattr(event_type, "value") else str(event_type),
+            was_away=self._player.is_away,
+        ))
+
         self._record_activity(event_type.name, voice, text)
         self._record_usage(0, True)
 
@@ -303,6 +314,20 @@ class SpeechEngine:
         msg = EventMessage(event_json=event_json, client_ip=client_ip)
         depth = self._worker.submit(msg)
 
+        try:
+            import json as json_lib
+            data = json_lib.loads(event_json)
+            ev_type_str = data.get("type", "message")
+            ev_text = data.get("content") or data.get("message") or data.get("tool") or data.get("output") or ""
+            if ev_text:
+                self._history.add_item(HistoryItem(
+                    text=str(ev_text),
+                    event_type=str(ev_type_str),
+                    was_away=self._player.is_away,
+                ))
+        except Exception:
+            pass
+
         self._record_activity('EVENT', 'auto', event_json)
         self._record_usage(0, True)
 
@@ -313,8 +338,70 @@ class SpeechEngine:
         )
 
     # ------------------------------------------------------------------
-    # Controls
+    # Controls & State
     # ------------------------------------------------------------------
+
+    @property
+    def history(self) -> SpokenHistoryBuffer:
+        """The spoken history buffer."""
+        return self._history
+
+    @property
+    def is_paused(self) -> bool:
+        """Whether playback is currently paused."""
+        return self._player.is_paused
+
+    @property
+    def is_away(self) -> bool:
+        """Whether Away Mode is currently enabled."""
+        return self._player.is_away
+
+    def pause(self) -> None:
+        """Pause playback."""
+        self._player.pause()
+        self._worker.submit(ControlMessage(action="pause", payload={}))
+
+    def resume(self) -> None:
+        """Resume playback."""
+        self._player.resume()
+        self._worker.submit(ControlMessage(action="resume", payload={}))
+
+    def set_away_mode(self, enabled: bool) -> None:
+        """Toggle Away Mode for silent buffering."""
+        self._player.set_away_mode(enabled)
+        self._worker.submit(ControlMessage(action="set_away_mode", payload={"enabled": enabled}))
+
+    def replay(self, count: int = 1, unread_only: bool = False) -> SpeakResult:
+        """Replay recent items from history."""
+        items = self._history.get_recent(count=count, unread_only=unread_only)
+        if not items:
+            return SpeakResult(status="skipped", message="No history items to replay.")
+
+        replayed_count = 0
+        for item in items:
+            try:
+                etype = EventType(item.event_type)
+            except ValueError:
+                etype = EventType.MESSAGE
+            self.speak(text=item.text, voice=item.voice, style=item.style, event_type=etype)
+            replayed_count += 1
+
+        if unread_only:
+            self._history.mark_all_read()
+
+        return SpeakResult(status="ok", message=f"Replayed {replayed_count} items.", queue_depth=replayed_count)
+
+    def get_catchup_summary(self) -> str:
+        """Generate a text catch-up summary of unread items."""
+        unread_items = self._history.get_unread()
+        return generate_catchup_summary(unread_items)
+
+    def speak_catchup_summary(self) -> SpeakResult:
+        """Generate and speak a catch-up summary of unread items."""
+        summary = self.get_catchup_summary()
+        res = self.speak(summary, priority=Priority.RESPONSE)
+        self._history.mark_all_read()
+        return res
 
     def set_volume(self, volume: float) -> None:
         """Set playback volume.

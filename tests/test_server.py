@@ -90,12 +90,23 @@ def test_control_endpoint(client, mock_engine):
 def test_status_endpoint(client, mock_engine):
     response = client.get("/status")
     assert response.status_code == 200
-    assert response.json() == {
-        "is_running": True,
-        "queue_depth": 0,
-        "tts_available": True
-    }
+    data = response.json()
+    assert data["is_running"] is True
+    assert data["queue_depth"] == 0
+    assert data["tts_available"] is True
+    assert "is_paused" in data
+    assert "is_away" in data
+    assert "unread_count" in data
+    assert "history_count" in data
     mock_engine.status.assert_called_once()
+
+def test_history_endpoint(client, mock_engine):
+    mock_engine.history.to_dict_list.return_value = []
+    mock_engine.history.unread_count = 0
+    mock_engine.history.total_count = 0
+    response = client.get("/history")
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
 
 def test_invalid_speak_priority(client, mock_engine):
     response = client.post(

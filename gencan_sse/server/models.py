@@ -26,3 +26,7 @@ class StatusResponse(BaseModel):
     is_running: bool
     queue_depth: int
     tts_available: bool
+    is_paused: bool = False
+    is_away: bool = False
+    unread_count: int = 0
+    history_count: int = 0

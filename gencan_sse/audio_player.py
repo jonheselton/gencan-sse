@@ -231,6 +231,8 @@ class AudioPlayer:
         self._using_desired_device = False
         self._last_init_attempt_time = 0.0
         self._idle_cleaned_up = False
+        self._is_paused = False
+        self._is_away = False
         
         # Audio stream pub/sub
         self._subscribers: set[tuple[asyncio.Queue[bytes], asyncio.AbstractEventLoop]] = set()
@@ -451,6 +453,25 @@ class AudioPlayer:
 
         current_entry = None
         while self._running:
+            if self._is_paused:
+                if self._notify:
+                    notify_task = asyncio.create_task(self._notify.wait())
+                    try:
+                        await asyncio.wait_for(notify_task, timeout=0.5)
+                        self._notify.clear()
+                    except asyncio.TimeoutError:
+                        pass
+                    finally:
+                        if not notify_task.done():
+                            notify_task.cancel()
+                            try:
+                                await notify_task
+                            except asyncio.CancelledError:
+                                pass
+                else:
+                    await asyncio.sleep(0.1)
+                continue
+
             if current_entry is None:
                 # Acquire lock and try to pop atomically to avoid TOCTOU race
                 async with self._lock:
@@ -578,7 +599,7 @@ class AudioPlayer:
                     except Exception as e:
                         logger.debug("Failed to broadcast chunk to subscriber: %s", e)
 
-                if self._stream:
+                if self._stream and not self._is_away:
                     play_t0 = time.time()
                     self._write_task = asyncio.create_task(asyncio.to_thread(self._stream.write, resampled_pcm))
                     try:
@@ -590,7 +611,7 @@ class AudioPlayer:
                                  len(pcm), play_elapsed, audio_task.priority.name,
                                  audio_task.event_type.name, age, len(self._heap))
                 else:
-                    logger.debug("Silent mode: skipped %d bytes (~%.1fs audio)", len(pcm), duration_est)
+                    logger.debug("Silent/Away mode: skipped writing %d bytes (~%.1fs audio)", len(pcm), duration_est)
             except Exception as e:
                 logger.warning("Error writing to audio stream: %s. Releasing audio player...", e)
                 await asyncio.to_thread(self._cleanup_pyaudio_sync)
@@ -607,6 +628,35 @@ class AudioPlayer:
     @property
     def queue_depth(self) -> int:
         return len(self._heap)
+
+    @property
+    def is_paused(self) -> bool:
+        return self._is_paused
+
+    @property
+    def is_away(self) -> bool:
+        return self._is_away
+
+    def pause(self) -> None:
+        """Pause audio playback."""
+        if not self._is_paused:
+            self._is_paused = True
+            logger.info("Audio player paused")
+
+    def resume(self) -> None:
+        """Resume audio playback."""
+        if self._is_paused:
+            self._is_paused = False
+            if self._notify:
+                self._notify.set()
+            logger.info("Audio player resumed")
+
+    def set_away_mode(self, enabled: bool) -> None:
+        """Toggle Away Mode for silent buffering."""
+        self._is_away = enabled
+        if not enabled and self._notify:
+            self._notify.set()
+        logger.info("Away Mode set to %s", "ON" if enabled else "OFF")
 
     def subscribe(self, maxsize: int = 100) -> asyncio.Queue[bytes]:
         """Subscribe to the audio stream. Returns an asyncio.Queue of PCM bytes."""
